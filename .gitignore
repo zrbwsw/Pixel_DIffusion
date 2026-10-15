@@ -1,0 +1,40 @@
+# This repository publishes only the Residual version and deployment metadata.
+/*
+!/.gitignore
+!/README.md
+!/require.txt
+!/Ours_BaseT_Residual_1008/
+
+# Never publish credentials or machine-local configuration.
+.env
+.env.*
+*.pem
+*.key
+auth*.json
+credentials*.json
+.ssh/
+.codex/
+.vscode/
+
+# Source-only snapshot; keep evaluation Python code and YAML catalogues.
+**/.git/
+**/.git.*
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.ipynb
+*.safetensors
+*.bin
+*.onnx
+*.h5
+*.hdf5
+*.zip
+*.gz
+*.tar.*
+*.pdf
+*.lock
+generated_images/
+eval_checkpoint/
+lightning_logs/
+/Ours_BaseT_Residual_1008/analysis/
