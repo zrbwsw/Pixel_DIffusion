@@ -11,6 +11,7 @@ from scripts.check_runtime import inspect_runtime, training_args
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT = "BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-L-80"
+H200_EXPERIMENT = "BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm_nogamma-NoDDTHead-B-80"
 
 
 @pytest.fixture
@@ -20,6 +21,7 @@ def resources(tmp_path, monkeypatch):
     models = tmp_path / "models"
     models.mkdir()
     (models / "dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth").write_bytes(b"placeholder")
+    (models / "dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth").write_bytes(b"placeholder")
     stats = tmp_path / "fid stats"
     stats.mkdir()
     for name in ("jit_in256_stats.npz", "weights-inception-2015-12-05-6726825d.pth"):
@@ -101,3 +103,44 @@ def test_duplicate_gpu_ids_are_rejected(resources, tmp_path):
     ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
     assert result.returncode != 0
     assert "Duplicate GPU index" in result.stderr
+
+
+@pytest.mark.parametrize("batch_size,accumulation", [(128, 1), (64, 2)])
+def test_h200_preflight_reports_scaled_lr_at_global_batch_1024(resources, batch_size, accumulation):
+    args = training_args([
+        "--config", str(ROOT / "configs" / f"{H200_EXPERIMENT}.yaml"),
+        "--data_path", str(resources), "--batch_size", str(batch_size),
+    ])
+    report = inspect_runtime(args, 8)
+    assert report["global_batch_size"] == 1024
+    assert report["accum_iter"] == accumulation
+    assert report["configured_blr"] == pytest.approx(5e-5)
+    assert report["effective_lr"] == pytest.approx(2e-4)
+    assert report["lr_source"] == "scaled_blr"
+    args.lr = 3e-4
+    explicit = inspect_runtime(args, 8)
+    assert explicit["effective_lr"] == pytest.approx(3e-4)
+    assert explicit["lr_source"] == "explicit"
+
+
+def test_h200_launcher_uses_eight_gpus_and_expected_batch_lr(resources, tmp_path):
+    output = tmp_path / "h200 preflight must not create"
+    env = dict(os.environ, PYTHON_BIN=sys.executable, CUDA_VISIBLE_DEVICES="4,5,6,7",
+               IMAGENET_ROOT=str(resources), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([
+        "bash", str(ROOT / "scripts" / f"train_{H200_EXPERIMENT}_01234567.sh"),
+        "--output_dir", str(output), "--resume", "", "--preflight",
+    ], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=90)
+    assert result.returncode == 0, result.stderr
+    report, _ = json.JSONDecoder().raw_decode(result.stdout)
+    assert report["world_size"] == 8
+    assert report["batch_size_per_gpu"] == 128
+    assert report["global_batch_size"] == 1024
+    assert report["accum_iter"] == 1
+    assert report["configured_blr"] == pytest.approx(5e-5)
+    assert report["effective_lr"] == pytest.approx(2e-4)
+    assert report["lr_source"] == "scaled_blr"
+    assert report["training_mode"] == "from_scratch"
+    assert report["dino_source"] == str(ROOT / "SSL_code/dinov3")
+    assert report["output_dir"] == str(output)
+    assert not output.exists()

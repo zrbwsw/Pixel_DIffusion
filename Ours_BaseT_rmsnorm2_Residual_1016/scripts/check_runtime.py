@@ -51,9 +51,13 @@ def inspect_runtime(args, world_size=1, sampling=False):
     checkpoint = Path(args.resume).expanduser() / "checkpoint-last.pth" if args.resume else None
     if checkpoint is not None and checkpoint.exists() and checkpoint.stat().st_size == 0:
         raise ValueError(f"Empty resume checkpoint: {checkpoint}")
+    effective_batch_size = local_global_batch * accumulation
+    effective_lr = args.lr if args.lr is not None else args.blr * effective_batch_size / 256
     report.update(
         data_path=str(data), batch_size_per_gpu=args.batch_size,
-        accum_iter=accumulation, global_batch_size=local_global_batch * accumulation,
+        accum_iter=accumulation, global_batch_size=effective_batch_size,
+        configured_blr=args.blr, effective_lr=effective_lr,
+        lr_source="explicit" if args.lr is not None else "scaled_blr",
         resume_checkpoint=str(checkpoint.resolve()) if checkpoint is not None and checkpoint.is_file() else None,
         training_mode="resume" if checkpoint is not None and checkpoint.is_file() else "from_scratch",
     )

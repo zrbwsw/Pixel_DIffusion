@@ -227,7 +227,7 @@ def test_rmsnorm_dropres_changes_only_null_label_routing_and_experiment_paths():
     }
 
 
-def test_nogamma_config_preserves_baseline_hyperparameters_and_isolates_paths():
+def test_nogamma_config_uses_h200_batch_and_lr_and_preserves_other_settings():
     base, nogamma = _args(RMSNORM_NO_DDT), _args(NOGAMMA_NO_DDT)
     assert nogamma.dino_jit_pre_blend_rmsnorm is True
     assert nogamma.dino_grounding_drop_on_label_drop is False
@@ -235,13 +235,17 @@ def test_nogamma_config_preserves_baseline_hyperparameters_and_isolates_paths():
     assert nogamma.start_epoch == 0
     assert nogamma.output_dir == nogamma.resume == f"checkpoints/{NOGAMMA_NO_DDT}"
     assert nogamma.metrics_log_name == "blend_rmsnorm_nogamma_no_ddt_head_diagnostics"
-    assert nogamma.batch_size == 64
-    assert nogamma.global_batch_size == 256
+    assert nogamma.batch_size == 128
+    assert nogamma.global_batch_size == 1024
     assert nogamma.accum_iter == 1
+    assert nogamma.blr == pytest.approx(5e-5)
+    assert nogamma.lr is None
+    assert nogamma.blr * nogamma.global_batch_size / 256 == pytest.approx(2e-4)
     assert nogamma.epochs == 80
     assert {
         key for key in vars(base) if getattr(base, key) != getattr(nogamma, key)
-    } == {"config", "exp_name", "output_dir", "resume", "metrics_log_name"}
+    } == {"config", "exp_name", "output_dir", "resume", "metrics_log_name",
+          "batch_size", "global_batch_size", "blr"}
     assert _args(NOGAMMA_NO_DDT, "--no-dino_jit_pre_blend_rmsnorm").dino_jit_pre_blend_rmsnorm is False
 
 

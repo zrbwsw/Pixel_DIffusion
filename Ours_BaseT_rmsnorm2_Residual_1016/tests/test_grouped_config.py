@@ -226,7 +226,7 @@ def test_rmsnorm_dropres_changes_only_null_label_routing_and_experiment_paths():
     }
 
 
-def test_rmsnorm2_config_preserves_baseline_hyperparameters_and_uses_new_paths():
+def test_rmsnorm2_config_uses_h200_batch_and_lr_and_preserves_other_settings():
     base, independent = _args(RMSNORM_NO_DDT), _args(RMSNORM2_NO_DDT)
     assert independent.dino_jit_pre_blend_rmsnorm is True
     assert independent.dino_grounding_drop_on_label_drop is False
@@ -234,13 +234,17 @@ def test_rmsnorm2_config_preserves_baseline_hyperparameters_and_uses_new_paths()
     assert independent.start_epoch == 0
     assert independent.output_dir == independent.resume == f"checkpoints/{RMSNORM2_NO_DDT}"
     assert independent.metrics_log_name == "blend_rmsnorm2_no_ddt_head_diagnostics"
-    assert independent.batch_size == 64
-    assert independent.global_batch_size == 256
+    assert independent.batch_size == 128
+    assert independent.global_batch_size == 1024
     assert independent.accum_iter == 1
+    assert independent.blr == pytest.approx(5e-5)
+    assert independent.lr is None
+    assert independent.blr * independent.global_batch_size / 256 == pytest.approx(2e-4)
     assert independent.epochs == 80
     assert {
         key for key in vars(base) if getattr(base, key) != getattr(independent, key)
-    } == {"config", "exp_name", "output_dir", "resume", "metrics_log_name"}
+    } == {"config", "exp_name", "output_dir", "resume", "metrics_log_name",
+          "batch_size", "global_batch_size", "blr"}
     assert _args(RMSNORM2_NO_DDT, "--no-dino_jit_pre_blend_rmsnorm").dino_jit_pre_blend_rmsnorm is False
 
 

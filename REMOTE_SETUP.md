@@ -82,16 +82,19 @@ training preflight. External weights and stats do not belong in Git.
 ## 4. Preflight and train
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 bash scripts/train_portable.sh "$config" --preflight
 bash scripts/train_portable.sh "$config"
 ```
 
-Defaults are 80 epochs, batch 64 per GPU, global batch 256, no accumulation
-on four GPUs, learning rate 1e-4, 5 warmup epochs, and online 50K no-CFG
+Defaults are 80 epochs, batch 128 per GPU, global batch 1024, no accumulation
+on eight H200 GPUs, base LR 5e-5, effective learning rate 2e-4 after
+5 warmup epochs, and online 50K no-CFG
 heun50 evaluation every 20 epochs. Select GPUs that actually exist and are
-free on that server. If memory is insufficient, use `--batch_size 32`;
-global batch 256 then requires accumulation 2 on four GPUs.
+free on that server. If memory is insufficient, use `--batch_size 64`;
+global batch 1024 then requires accumulation 2 on eight GPUs, with the same LR.
+The YAML uses `lr: null`: `lr = blr * global_batch_size / 256`.
+Each experiment uses all eight GPUs on its own server (or runs sequentially).
 
 The preflight checks paths/configuration/batch arithmetic. It does not load
 the model, allocate training GPU memory, or prove that the batch fits.
@@ -99,6 +102,8 @@ The version-local output is `checkpoints/$experiment/`, with `train.log`
 and structured diagnostics. Relaunching resumes that experiment's own
 `checkpoint-last.pth` if it exists; otherwise training starts from scratch.
 Do not resume a different normalization variant's optimizer/EMA state.
+If the selected output already contains an old batch-256 checkpoint, use a
+new output directory and `--resume ''` for this batch-1024 experiment.
 
 For an isolated smoke run, keep the main experiment output untouched:
 
@@ -110,9 +115,10 @@ bash scripts/train_portable.sh "$config" --epochs 1 --num_images 100 --gen_bsz 8
 This smoke run evaluates only 100 generated images at the end; its metrics
 are not comparable to the 50K experiment results.
 
-The named `*_4567.sh` launchers are local presets with original-server
-defaults. Prefer the portable launcher above on other servers. Launchers
-never terminate existing jobs or automatically queue behind them.
+The named `*_01234567.sh` launchers set all eight GPUs and the same batch/LR
+settings explicitly. They use the activated Python environment and respect
+the resource-path variables above. Launchers never terminate existing jobs
+or automatically queue behind them.
 
 ## 5. CFG sampling and offline evaluation
 

@@ -66,11 +66,12 @@ diffusion:
 optimization:
   epochs: 80
   warmup_epochs: 5
-  batch_size: 64
-  global_batch_size: 256
+  batch_size: 128
+  global_batch_size: 1024
   accum_iter: 1
   lr: null
-  blr: 0.0001
+  # lr = blr * global_batch_size / 256 = 0.0002 after warmup.
+  blr: 0.00005
   min_lr: 0.0
   lr_schedule: constant
   weight_decay: 0.0
