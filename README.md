@@ -1,5 +1,7 @@
 # Pixel_Diffusion 项目目录
 
+H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目结构.md)，其中列出了实际仓库、数据集、评测资源路径及 Codex 分工。
+
 ## GitHub 同步范围
 
 仓库 `zrbwsw/Pixel_DIffusion` 发布以下三个版本的代码、配置、脚本、测试及必要
