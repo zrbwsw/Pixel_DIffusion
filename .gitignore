@@ -1,9 +1,12 @@
-# This repository publishes only the Residual version and deployment metadata.
+# Publish selected Residual source versions and deployment metadata only.
 /*
 !/.gitignore
 !/README.md
+!/REMOTE_SETUP.md
 !/require.txt
 !/Ours_BaseT_Residual_1008/
+!/Ours_BaseT_rmsnorm2_Residual_1016/
+!/Ours_BaseT_nogamma_Residual_1016/
 
 # Never publish credentials or machine-local configuration.
 .env
@@ -19,6 +22,8 @@ credentials*.json
 # Source-only snapshot; keep evaluation Python code and YAML catalogues.
 **/.git/
 **/.git.*
+!/Ours_BaseT_rmsnorm2_Residual_1016/.gitignore
+!/Ours_BaseT_nogamma_Residual_1016/.gitignore
 .venv/
 venv/
 __pycache__/

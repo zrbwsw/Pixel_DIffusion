@@ -2,13 +2,21 @@
 
 ## GitHub 同步范围
 
-仓库 `zrbwsw/Pixel_DIffusion` 当前仅发布 `Ours_BaseT_Residual_1008/` 的代码、
-配置、脚本、测试及必要第三方源码，不上传其他方法、实验输出、数据集或权重。
-根目录 `require.txt` 对应该版本的依赖。
-远端服务器从 [部署说明](Ours_BaseT_Residual_1008/readme/remote_setup.md) 开始，
-不要直接运行含本机绝对路径的历史脚本。
+仓库 `zrbwsw/Pixel_DIffusion` 发布以下三个版本的代码、配置、脚本、测试及必要
+第三方源码，不上传实验输出、数据集、预训练权重或评测资源。三个版本使用相同依赖，
+根目录 `require.txt` 引用原版本的依赖；也可使用各版本自己的 `require.txt`。
 
-以下为原始服务器的完整工作区说明；表中的其他目录不会随本次 Git clone 下载。
+| 版本 | 融合前的 RMSNorm |
+| --- | --- |
+| [`Ours_BaseT_Residual_1008/`](Ours_BaseT_Residual_1008/) | 原始实现；启用时两路共享可学习通道权重。 |
+| [`Ours_BaseT_rmsnorm2_Residual_1016/`](Ours_BaseT_rmsnorm2_Residual_1016/) | DINO、JiT 各自学习独立的通道权重。 |
+| [`Ours_BaseT_nogamma_Residual_1016/`](Ours_BaseT_nogamma_Residual_1016/) | affine-free per-token RMSNorm，无可学习 gamma。 |
+
+两个新版本的远端安装、预检、训练和采样参见 [部署说明](REMOTE_SETUP.md)。
+原版本的历史部署说明位于 [remote_setup.md](Ours_BaseT_Residual_1008/readme/remote_setup.md)。
+远端使用 `scripts/train_portable.sh` 选择 GPU 和资源路径，不要直接使用本机专用脚本。
+
+以下为原始服务器的完整工作区说明；除上面列出的三个版本外，其他方法和资源目录不会随 Git clone 下载。
 
 `Pixel_Diffusion` 是当前项目根目录。相关工作的源码、论文资料、实验记录、评测资源和我们的方法实现分开放置；以下只列非隐藏目录。
 
@@ -27,6 +35,8 @@
 | `Ours_BaseT_DinoTNorm_0914/` | 我们的 BaseT + DinoTNorm 方法代码。 |
 | `Ours_BaseT_DinoT4Y8_1008/` | BaseT + DinoT4Y8 方法代码及历史训练、采样结果。 |
 | `Ours_BaseT_Residual_1008/` | BaseT + Residual 方法，以及 PgT、时间融合和 NoDDTHead 消融实验。 |
+| `Ours_BaseT_rmsnorm2_Residual_1016/` | 两路独立可学习 RMSNorm 的 NoDDTHead 版本。 |
+| `Ours_BaseT_nogamma_Residual_1016/` | 两路融合前使用无 gamma RMSNorm 的 NoDDTHead 版本。 |
 
 ## Ours 目录命名
 

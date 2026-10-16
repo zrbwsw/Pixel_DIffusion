@@ -1,0 +1,110 @@
+# L-scale version of BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead.
+# JiT-L/16 and DINOv3-L/16 both use 1024-dimensional patch tokens.
+# The two branches are independently normalized per token before t/(1-t) blending.
+
+experiment:
+  exp_name: BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-L-80
+  output_dir: checkpoints/BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-L-80
+  resume: checkpoints/BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-L-80
+
+data:
+  data_path: /data0/datasets/imagenet
+  img_size: 256
+  class_num: 1000
+  hflip_prob: 0.5
+  num_workers: 12
+  pin_mem: true
+
+model:
+  jit:
+    model: JiT-L/16
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+    jit_add_pos_embed_to_dino_tokens: true
+  dino_student:
+    dino_model_name: dinov3_vitl16
+    dino_preprocess_input: false
+    dino_weights: ${PRETRAIN_MODELS_ROOT}/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
+    dino_aggregation: mls
+    dino_layers: default
+  representation_residual:
+    dino_jit_input_mode: time_blend
+    dino_input_projector: pixeldit2
+    dino_jit_pre_blend_rmsnorm: true
+    dino_grounding_drop_on_label_drop: false
+    dino_residual_gate: none
+    dino_residual_hidden_dim: 0
+    dino_residual_drop_on_label_drop: false
+  lora:
+    dino_lora_r: 64
+    dino_lora_alpha: 64.0
+    dino_lora_dropout: 0.0
+    dino_lora_target_modules: qkv,proj,fc1,fc2
+  trainable_dino_parameters:
+    dino_train_patch_embed: true
+
+alignment:
+  source:
+    jit_alignment_depth: 4
+  projector:
+    dino_projector_kernel_size: 3
+  loss:
+    dino_zscore_alpha: 0.8
+
+ddt_head:
+  use_ddt_head: false
+  ddt_head_dim: 2048
+  ddt_head_num_heads: 16
+  ddt_head_depth: 2
+  ddt_head_bottleneck_dim: 128
+
+diffusion:
+  P_mean: -0.8
+  P_std: 0.8
+  noise_scale: 1.0
+  t_eps: 0.05
+  label_drop_prob: 0.1
+
+optimization:
+  epochs: 80
+  warmup_epochs: 5
+  batch_size: 16
+  global_batch_size: 256
+  accum_iter: 1
+  lr: null
+  blr: 0.0001
+  min_lr: 0.0
+  lr_schedule: constant
+  weight_decay: 0.0
+  ema_decay1: 0.9999
+  ema_decay2: 0.9996
+
+checkpointing:
+  start_epoch: 0
+  save_interval: 10
+  save_last_freq: 1
+
+evaluation:
+  online_eval: true
+  evaluate_gen: false
+  eval_freq: 20
+  sampling_method: heun
+  num_sampling_steps: 50
+  cfg: 1.0
+  interval_min: 0.0
+  interval_max: 1.0
+  num_images: 50000
+  gen_bsz: 16
+  keep_eval_images: false
+  resume_eval_images: false
+
+logging:
+  log_freq: 100
+  metrics_log_freq: 100
+  metrics_log_name: blend_rmsnorm_no_ddt_head_l_diagnostics
+  write_structured_metrics: true
+
+runtime:
+  device: cuda
+  seed: 0
+  dist_url: env://

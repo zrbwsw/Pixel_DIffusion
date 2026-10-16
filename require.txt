@@ -1,2 +1,2 @@
-# Dependencies for Ours_BaseT_Residual_1008 only.
+# Shared dependencies for the three published Residual source versions.
 -r Ours_BaseT_Residual_1008/require.txt
