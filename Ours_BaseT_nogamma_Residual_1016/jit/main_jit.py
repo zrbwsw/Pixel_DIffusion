@@ -31,6 +31,7 @@ import util.misc as misc
 import copy
 from engine_jit import train_one_epoch, evaluate, online_evaluation_assets
 from config_utils import parse_args_with_config
+from resource_paths import resource_root
 
 # 外层 J18-new 入口会在调用 main() 前注入 DINOJiTDenoiser。直接运行原生 JiT
 # 时则在 main() 内延迟导入 baseline Denoiser，避免当前主线 import 未使用的
@@ -122,7 +123,7 @@ def get_args_parser():
                         help='Path to the checkpoint to generate from')
 
     # dataset
-    parser.add_argument('--data_path', default='../data', type=str,
+    parser.add_argument('--data_path', default=str(resource_root('IMAGENET_ROOT')), type=str,
                         help='Path to the dataset')
     parser.add_argument('--class_num', default=1000, type=int)
     parser.add_argument('--hflip_prob', default=0.0, type=float,

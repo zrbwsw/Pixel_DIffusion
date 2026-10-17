@@ -20,6 +20,7 @@ import cv2
 
 import util.misc as misc
 import util.lr_sched as lr_sched
+from resource_paths import resource_root
 import torch_fidelity
 import copy
 
@@ -420,9 +421,7 @@ def online_evaluation_assets(img_size):
     """
     if img_size not in (256, 512):
         raise NotImplementedError(f"No online FID reference for image size {img_size}")
-    root = os.environ.get(
-        "FID_STATS_ROOT", "/data0/zhangruobei/Work/Pixel_Diffusion/fid_stats"
-    )
+    root = resource_root("FID_STATS_ROOT")
     statistics = os.path.join(root, f"jit_in{img_size}_stats.npz")
     weights = os.path.join(root, "weights-inception-2015-12-05-6726825d.pth")
     for path in (statistics, weights):

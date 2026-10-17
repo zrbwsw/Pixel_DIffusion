@@ -100,7 +100,7 @@ bash 'scripts/train_BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm_nogamma-No
 
 The script resolves its own project root, so it also works from another
 working directory. Activate `irepa` first: the default interpreter is `python`
-from PATH. Default resources are `/data0/datasets/imagenet` and
+from PATH. Default resources are `/mnt/shared-storage-user/datafactory-share/gushishen/imagenet` and
 `../pretrain_models`. Override paths with
 `PYTHON_BIN`, `IMAGENET_ROOT`, `PRETRAIN_MODELS_ROOT`, `FID_STATS_ROOT`, or
 `NANOGEN_EVALS_ROOT`. Local DINOv3 source is explicitly pinned to this version.

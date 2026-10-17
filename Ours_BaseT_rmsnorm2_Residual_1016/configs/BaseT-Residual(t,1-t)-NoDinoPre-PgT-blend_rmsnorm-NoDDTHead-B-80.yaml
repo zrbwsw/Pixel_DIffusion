@@ -7,7 +7,7 @@ experiment:
   resume: checkpoints/BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-B-80
 
 data:
-  data_path: /data0/datasets/imagenet
+  data_path: ${IMAGENET_ROOT}
   img_size: 256
   class_num: 1000
   hflip_prob: 0.5

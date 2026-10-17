@@ -16,7 +16,7 @@ experiment:
   resume: checkpoints/Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80
 
 data:
-  data_path: /data0/datasets/imagenet
+  data_path: ${IMAGENET_ROOT}
   img_size: 256
   class_num: 1000
   hflip_prob: 0.5

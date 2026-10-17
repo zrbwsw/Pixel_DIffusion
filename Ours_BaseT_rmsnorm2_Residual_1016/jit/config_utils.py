@@ -18,6 +18,11 @@ from typing import Any, Sequence
 
 import yaml
 
+if __package__:
+    from .resource_paths import DEFAULT_RESOURCE_ROOTS, resource_root
+else:
+    from resource_paths import DEFAULT_RESOURCE_ROOTS, resource_root
+
 
 def _flatten_grouped_config(
     node: Mapping[str, Any],
@@ -68,10 +73,8 @@ def _coerce_config_value(
     if value is None:
         return None
     if isinstance(value, str):
-        value = value.replace(
-            "${PRETRAIN_MODELS_ROOT}",
-            os.environ.get("PRETRAIN_MODELS_ROOT", "/data0/pretrain_models"),
-        )
+        for name in DEFAULT_RESOURCE_ROOTS:
+            value = value.replace("${" + name + "}", str(resource_root(name)))
         value = os.path.expandvars(value)
 
     boolean_actions = (

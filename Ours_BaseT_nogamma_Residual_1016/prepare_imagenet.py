@@ -14,7 +14,7 @@ Typical usage:
 
     python prepare_imagenet.py \
         --archive-dir /path/to/official_archives \
-        --output-dir /data0/datasets/imagenet \
+        --output-dir /mnt/shared-storage-user/datafactory-share/gushishen/imagenet \
         --workers 8
 
 The output is directly compatible with torchvision ImageFolder and RepPixel's

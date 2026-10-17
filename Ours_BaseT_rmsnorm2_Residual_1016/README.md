@@ -77,7 +77,7 @@ bash 'scripts/train_BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm2-NoDDTHead
 Activate the `irepa` environment first; the launcher uses `python` from PATH
 unless `PYTHON_BIN` is set. Default resource paths:
 
-- ImageNet: `/data0/datasets/imagenet`.
+- ImageNet: `/mnt/shared-storage-user/datafactory-share/gushishen/imagenet`.
 - DINOv3-B weights: `../pretrain_models` (set `PRETRAIN_MODELS_ROOT` to the actual location).
 - Online FID/IS references and Inception weights: `../fid_stats`.
 - Offline evaluation assets: `../nanogen-evals`.

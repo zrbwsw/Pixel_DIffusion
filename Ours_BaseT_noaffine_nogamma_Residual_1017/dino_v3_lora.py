@@ -24,12 +24,10 @@ import torch
 import torch.nn as nn
 
 from dino_lora import inject_dino_lora
+from jit.resource_paths import resource_root
 
 
 THIS_DIR = Path(__file__).resolve().parent
-PRETRAIN_MODELS_ROOT = Path(
-    os.environ.get("PRETRAIN_MODELS_ROOT", "/data0/pretrain_models")
-).expanduser()
 
 _DINOV3_WEIGHT_FILENAMES = {
     "dinov3_vits16": "dinov3_vits16_pretrain_lvd1689m-08c60483.pth",
@@ -71,7 +69,7 @@ def _resolve_weights(model_name: str, weights_path: Optional[str]) -> Path:
     filename = _DINOV3_WEIGHT_FILENAMES.get(_normalize_name(model_name))
     if filename is None:
         filename = _DINOV3_WEIGHT_FILENAMES["dinov3_vitb16"]
-    candidates = [PRETRAIN_MODELS_ROOT / filename]
+    candidates = [resource_root("PRETRAIN_MODELS_ROOT") / filename]
     for candidate in candidates:
         if candidate.is_file():
             return candidate

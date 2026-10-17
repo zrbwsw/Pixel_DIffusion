@@ -193,35 +193,37 @@ The YAML keeps `lr: null`, so `lr = blr * global_batch_size / 256`.
 This fork and its `nogamma_Residual_1016` source have identical optimization
 settings for comparison.
 
-From this directory, check resources without loading a model or starting
-training:
+The H200 deployment root is
+`/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion`.
+The H200 tmux launcher uses the shared CUDA 12.6 environment and checks all
+8 H200 GPUs on `agent-gpu-2` (H200-0257) before starting:
 
 ```bash
-bash 'scripts/train_BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm_nogamma-NoDDTHead-B-80_01234567.sh' --preflight
+# Run on agent-gpu-2 from this method directory.
+bash scripts/train_noaffine_nogamma_B80_8gpu.sh --preflight
+bash scripts/train_noaffine_nogamma_B80_8gpu.sh
 ```
 
-Launch:
+The default mode creates tmux session
+`train-noaffine-nogamma-B80-8gpu-b128-gbs1024`; preflight only checks resources
+and resolved hyperparameters. Logs and checkpoints are under this method's
+`checkpoints/BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm_nogamma-NoDDTHead-B-80/`.
+This directory had no previous checkpoint when the corrected version was
+prepared. The sibling 1016 method's checkpoints are not used for resume.
 
-```bash
-bash 'scripts/train_BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm_nogamma-NoDDTHead-B-80_01234567.sh'
-```
+H200 resource defaults (all local, no GPU-side download):
 
-The script resolves its own project root, so it also works from another
-working directory. Activate `irepa` first: the default interpreter is `python`
-from PATH. Default resources are `/data0/datasets/imagenet` and
-`../pretrain_models`. Override paths with
-`PYTHON_BIN`, `IMAGENET_ROOT`, `PRETRAIN_MODELS_ROOT`, `FID_STATS_ROOT`, or
-`NANOGEN_EVALS_ROOT`. Local DINOv3 source is explicitly pinned to this version.
-On the current server the weights are in `/data0/pretrain_models`, so set
-`PRETRAIN_MODELS_ROOT=/data0/pretrain_models` when using the inherited launcher
-(its default sibling `../pretrain_models` directory does not exist here).
+- Shared interpreter:
+  `/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/envs/irepa-py310-cu126-20261015/bin/python`.
+- ImageNet: `/mnt/shared-storage-user/datafactory-share/gushishen/imagenet`.
+- Pretrained weights: repository-root `pretrain_models/`.
+- Online statistics and Inception weights: repository-root `fid_stats/`.
+- Offline evaluation weights/statistics: repository-root `nanogen-evals/`.
+- DINOv3 source: this method's `SSL_code/dinov3/`.
 
-Training is not started by preparation or preflight. The script neither
-stops existing jobs nor queues behind them; free GPUs 0-7 before launching.
-Do not run both experiments simultaneously on the same eight GPUs. Preflight
-reports batch and effective LR but does not verify H200 memory capacity.
-If this experiment already has an old batch-256 checkpoint, use a new
-output directory and `--resume ''` for a clean batch-1024 experiment.
+Overrides are `PYTHON_BIN`, `IMAGENET_ROOT`, `PRETRAIN_MODELS_ROOT`,
+`FID_STATS_ROOT`, and `NANOGEN_EVALS_ROOT`.
+
 
 ## Tests
 
@@ -240,7 +242,8 @@ norms and generation gradients are unaffected. The independent regularization
 path must remain frozen, have no LoRA/MLS, use iREPA preprocessing, and remain
 outside the registered generative state dict.
 
-Verified for this corrected version on 2026-10-17:
+Upstream verification for this corrected version on 2026-10-17
+(before H200 deployment):
 
 - Full CPU suite: **113 passed, 4 skipped**. Skips require CUDA JiT RoPE or
   CUDA BF16 autocast. Tests cover independent parameter instances, retained
@@ -263,4 +266,31 @@ Verified for this corrected version on 2026-10-17:
   `PRETRAIN_MODELS_ROOT=/data0/pretrain_models`, with the new project as its
   output root and no existing checkpoint detected on this machine.
 
-No training was launched and no existing training process/checkpoint was changed.
+The upstream verification above did not launch training. H200 deployment
+validation and launch status are recorded separately below.
+
+
+## H200 local verification (2026-10-17)
+
+Synced upstream `f8dbfc368f3d8b74193ea19c9ae73e2c0c85fead` with shared-storage
+path adaptations retained. The original local source was backed up first.
+
+- CPU regression suite: **110 passed, 7 skipped**. Two cases require CUDA;
+  five require a separate official PixelDiT2 reference checkout.
+- Real pretrained DINOv3-B: generation has 48 LoRA modules and no final LN
+  affine; alignment has no LoRA, all parameters frozen, and final LN gamma/beta
+  exactly equal to the pretrained checkpoint. Their parameters are independent.
+- Against local iREPA `DINOv3Encoder` methods using the same backbone and raw
+  input, CPU preprocessing and patch features match exactly (max difference 0).
+- Flattened configuration leaf values match the prior nogamma B80 config.
+  Resolved preflight: 8 GPUs x 128, global batch 1024, accumulation 1, target
+  LR 2e-4 after five warmup epochs, 80 epochs, EMA 0.9999/0.9996.
+- Training was launched on agent-gpu-2 at **2026-10-17 15:52:52 UTC+8** in the
+  tmux session above. The output directory had no old checkpoint; this is a
+  fresh run from pretrained DINOv3 weights. Consult `train.log` and, on exit,
+  `exit_code.txt` for current state.
+
+Verification records and the source backup are under
+`/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/work/sync-noaffine-generation-alignment-20261017-154750/`.
+The run records its source hashes and encoder protocol in `source_sha256.txt`
+and `run_info.txt` beside `train.log`.

@@ -1,9 +1,9 @@
 # Ours Residual 离线评测
 
 本目录提供与 JiT online evaluation 分开的离线评测入口。`main_dino_jit.py`
-中的 online eval 从共享目录 `/data0/zhangruobei/Work/Pixel_Diffusion/fid_stats/jit_in256_stats.npz` 读取统计值，
+中的 online eval 从共享目录 `/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/fid_stats/jit_in256_stats.npz` 读取统计值，
 只计算 FID 和 Inception Score。离线流程在采样结束后读取生成的 PNG 或 NPZ，
-使用统一缓存 `/data0/zhangruobei/Work/Pixel_Diffusion/nanogen-evals`
+使用统一缓存 `/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/nanogen-evals`
 计算 `fid,inception_score,fdr6`。
 
 ## 评测缓存
@@ -17,7 +17,7 @@ timm extractor 的权重。Online 的 Inception 权重则与 JiT 统计值一起
 先执行：
 
 ```bash
-cd /data0/zhangruobei/Work/Pixel_Diffusion/Ours_BaseT_Residual_1008
+cd /mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/Ours_BaseT_rmsnorm2_Residual_1016
 PYTHONPATH=jit python -m evaluation.evaluate_fdr6 --check-assets
 ```
 

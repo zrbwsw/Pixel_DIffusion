@@ -133,14 +133,14 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument("--dino_model_name", default="dinov3_vitb16", type=str,
                         help="DINOv3 encoder name, e.g. dinov3_vitb16 or dinov3_vitl16.")
     # 预训练权重文件。可传空字符串，让构建器从 PRETRAIN_MODELS_ROOT
-    # （本机默认 /data0/pretrain_models）自动解析；
+    # （默认 Git 仓库根目录下的 pretrain_models/）自动解析；
     # 明确给路径更利于离线训练和复现实验。
     parser.add_argument(
         "--dino_weights",
         default="",
         type=str,
         help="Path to encoder weights. Pass empty string to auto-resolve from "
-             "PRETRAIN_MODELS_ROOT (default: /data0/pretrain_models).",
+             "PRETRAIN_MODELS_ROOT (default: pretrain_models/ under the Git repository root).",
     )
     # 多层 token 的合并方式：
     # - none：只取单层（通常为最后一层）；
