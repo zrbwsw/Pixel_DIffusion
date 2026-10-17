@@ -119,6 +119,10 @@ GPUS=0,1,2,3,4,5,6,7 bash scripts/train_basejit_irepa.sh \
 GPUS=0,1,2,3 bash scripts/train_jit_rmsnorm_irepa.sh --preflight
 GPUS=0,1,2,3 bash scripts/train_jit_rmsnorm_irepa.sh
 
+# 本机八卡：global512 = 8x64，LR1e-4；其余沿用上面的20轮配置。
+bash scripts/train_jit_rmsnorm_irepa_8gpu_bsz512.sh --preflight
+bash scripts/train_jit_rmsnorm_irepa_8gpu_bsz512.sh
+
 # 对照组：同一 DINOv3 教师，但不加输入 RMSNorm。
 GPUS=0,1,2,3 bash scripts/train_basejit_irepa.sh \
   configs/basejit_irepa_dinov3_b20_gbs512.yaml
@@ -132,6 +136,14 @@ GPUS=0,1,2,3,4,5,6,7 bash scripts/train_jit_rmsnorm_irepa.sh \
 配置与 CLI 的明确覆盖均生效；相对 output 路径固定相对于本项目。
 默认从零开始，非空输出目录会拒绝启动；续训须显式指定同目录 `--resume`，
 并校验关键模型/训练设置。旧 rmsnorm2 或 `(0,1)` 项目的 checkpoint 不兼容。
+
+本机八卡脚本默认使用 `irepa` 环境的 Python，沿用20轮配置的warmup5、
+AdamW(.9,.95)、weight decay=0、EMA .9999/.9996、DINOv3-B/16正则化和
+Heun50/CFG2.9/[.1,1]/50K评估，不切换到global1024/LR2e-4的80轮配置。
+输出目录为 `checkpoints/jit-rmsnorm-basejit-irepa-dinov3-B-20-gbs512-gpus8/`。
+`jit_rmsnorm` 不构建生成DINO、LoRA、MLS、PgT及其RMSNorm，因此训练和采样
+都不会执行生成DINO分支的forward；仅干净图像的正则化教师仍需前向。
+八卡与四卡保持有效batch/LR相同，但分布式样本划分和随机数序列不保证逐步一致。
 
 官方 DINOv1 源码固定在 `SSL_code/dino/`，入口为原版 torch.hub 建立项目内缓存链接，
 使用现有 `dino_vitbase16_pretrain.pth`，不改 encoder 加载/预处理逻辑。
@@ -161,13 +173,18 @@ idea模式也通过真实双DINO、单rank DDP、原版训练循环的两步forw
 数值验证对照的是上述当前原版源码，使用相同设备/软件和确定性测试设置。
 历史日志没有记录源码 revision，不能仅凭日志证明历史训练源码逐字相同；
 也没有由单次 forward 证明长期训练、不同GPU或FID完全重现。
-本次完成代码和验证，尚未启动20/80 epoch正式训练。
+上述基座验证完成时尚未启动20/80 epoch正式训练；JiT-only实验的启动状态见下文。
 
-新增 JiT-only RMSNorm 的 CPU 回归：19项通过、2项GPU专属测试跳过。
+新增 JiT-only RMSNorm 的 CPU 回归：20项通过、2项GPU专属测试跳过。
 检查包含原版参数初始化/RNG保持不变、唯一新增gamma、FP32/BF16归一化、
 APE前插入、固定权重不受t或null label影响、原版去噪/对齐loss反传、AdamW、
 双EMA、权重重载、CFG/Heun采样，以及DINOv3配对配置仅改变模式与输出标识。
 20轮四卡与80轮八卡配置均通过preflight；24项上游文件哈希校验保持通过。
+本机20轮八卡脚本也通过preflight，并验证其只改变每卡batch和输出标识，
+有效batch/LR及其余训练配置不变；训练/采样测试禁止调用生成分支构建或forward。
 另用本机真实DINOv3-B/16预训练权重完成CPU教师前向：256px输出为
 `[1,256,768]` patch tokens，eval模式、特征有限、最终LN gamma/beta与权重逐位一致。
-新增模式尚未进行CUDA训练/编译验证，未启动正式训练，也未打断本机已有任务。
+JiT-only模式已于2026-10-17在本机GPU 0--7启动正式训练，global512=8x64、
+目标LR1e-4、20轮，已通过CUDA编译及首批forward/backward并进入第二轮。
+这不代表完整20轮训练或最终生成质量已验证。日志在本机
+`checkpoints/logs/jit_rmsnorm_dinov3_b20_gbs512_8gpu.train.log`，不上传GitHub。

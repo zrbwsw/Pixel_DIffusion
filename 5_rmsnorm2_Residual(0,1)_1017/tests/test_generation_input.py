@@ -159,7 +159,14 @@ def test_jit_rmsnorm_hook_precedes_ape_without_time_or_label_scaling(tiny_factor
     assert image.shape == noisy.shape
 
 
-def test_jit_rmsnorm_original_training_ema_sampling_and_state_reload(tiny_factory):
+def test_jit_rmsnorm_original_training_ema_sampling_and_state_reload(tiny_factory, monkeypatch):
+    import generation_input
+
+    def forbid_generation(*args, **kwargs):
+        pytest.fail("JiT-only training/sampling must not build or execute generation DINO/PgT")
+
+    monkeypatch.setattr(generation_input, "_build_generation_encoder", forbid_generation)
+    monkeypatch.setattr(generation_input.RMSNormGenerationInput, "forward", forbid_generation)
     model = tiny_factory("jit_rmsnorm").train()
     nn.init.normal_(model.net.final_layer.linear.weight, std=0.02)
     gain = model.net.generation_input.patch_norm.weight
