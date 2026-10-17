@@ -169,10 +169,11 @@ def test_label_drop_zeros_only_residual_path_during_sampling():
     torch.testing.assert_close(tokens[:, 0, 0], torch.tensor([2.75, 2.0]))
 
 
-def make_blend_router(drop_grounding=False):
+def make_blend_router(drop_grounding=False, reverse=False):
     router = make_router()
     router.dino_jit_input_mode = "time_blend"
     router.dino_grounding_drop_on_label_drop = drop_grounding
+    router.dino_time_blend_reverse = reverse
     router.dino_residual_drop_on_label_drop = False
     router.dino_preprocess_input = False
     router.num_classes = 1000
@@ -210,8 +211,9 @@ def test_pre_blend_rmsnorm_parameters_and_updates_are_not_shared():
 
 
 @pytest.mark.parametrize("timestep", [0.0, 0.25, 1.0])
-def test_time_blend_uses_each_paths_own_rmsnorm_gain(timestep):
-    router = make_blend_router()
+@pytest.mark.parametrize("reverse", [False, True])
+def test_time_blend_uses_each_paths_own_rmsnorm_gain(timestep, reverse):
+    router = make_blend_router(reverse=reverse)
     enable_blend_rmsnorm(router)
     with torch.no_grad():
         router.jit_pre_blend_norm.weight.fill_(2.0)
@@ -222,30 +224,45 @@ def test_time_blend_uses_each_paths_own_rmsnorm_gain(timestep):
     )
     torch.testing.assert_close(diagnostics["native_tokens"], torch.full((2, 4, 3), 2.0))
     torch.testing.assert_close(diagnostics["dino_projected_tokens"], torch.full((2, 4, 3), 3.0))
-    torch.testing.assert_close(fused, torch.full((2, 4, 3), 2.0 + timestep))
+    dino_weight = 1 - timestep if reverse else timestep
+    torch.testing.assert_close(fused, torch.full((2, 4, 3), 2.0 + dino_weight))
 
     fused.sum().backward()
     jit_grad = router.jit_pre_blend_norm.weight.grad
     dino_grad = router.dino_pre_blend_norm.weight.grad
     assert torch.isfinite(jit_grad).all() and torch.isfinite(dino_grad).all()
-    assert bool(jit_grad.abs().sum() > 0) is (timestep < 1)
-    assert bool(dino_grad.abs().sum() > 0) is (timestep > 0)
+    assert bool(jit_grad.abs().sum() > 0) is (dino_weight < 1)
+    assert bool(dino_grad.abs().sum() > 0) is (dino_weight > 0)
 
 
-def test_time_blend_weights_sum_to_one_at_endpoints_and_midpoint():
-    router = make_blend_router()
+@pytest.mark.parametrize("reverse,expected", [
+    (False, [2.0, 3.0, 6.0]), (True, [6.0, 5.0, 2.0]),
+])
+def test_time_blend_weights_sum_to_one_at_endpoints_and_midpoint(reverse, expected):
+    router = make_blend_router(reverse=reverse)
     fused, diagnostics = router._compose_jit_input_tokens(
         torch.zeros(3, 3, 2, 2), torch.full((3, 4, 3), 6.0),
         torch.tensor([0.0, 0.25, 1.0]),
     )
-    torch.testing.assert_close(fused[:, 0, 0], torch.tensor([2.0, 3.0, 6.0]))
+    torch.testing.assert_close(fused[:, 0, 0], torch.tensor(expected))
     torch.testing.assert_close(
         diagnostics["jit_weighted_tokens"] + diagnostics["dino_weighted_tokens"], fused,
     )
 
 
-def test_time_blend_backpropagates_to_both_paths_and_input_projector():
+def test_time_blend_without_reverse_attribute_keeps_legacy_weights():
     router = make_blend_router()
+    del router.dino_time_blend_reverse
+    fused, _ = router._compose_jit_input_tokens(
+        torch.zeros(3, 3, 2, 2), torch.full((3, 4, 3), 6.0),
+        torch.tensor([0.0, 0.25, 1.0]),
+    )
+    torch.testing.assert_close(fused[:, 0, 0], torch.tensor([2.0, 3.0, 6.0]))
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_time_blend_backpropagates_to_both_paths_and_input_projector(reverse):
+    router = make_blend_router(reverse=reverse)
     router.net.x_embedder = TrainableTokens(2.0)
     router.net.patch_size = 1
     router.dino_input_projector = TrainableScale(0.5)
@@ -261,19 +278,24 @@ def test_time_blend_backpropagates_to_both_paths_and_input_projector():
     assert router.dino_input_projector.grid_hw == (2, 2)
 
 
-@pytest.mark.parametrize("drop_grounding,expected_null", [(False, 1.25), (True, 2.0)])
-def test_cfg_null_label_uses_dino_by_default_and_native_only_when_enabled(drop_grounding, expected_null):
-    router = make_blend_router(drop_grounding)
+@pytest.mark.parametrize("drop_grounding", [False, True])
+@pytest.mark.parametrize("reverse,expected_cond", [(False, 1.25), (True, 1.75)])
+def test_cfg_null_label_uses_dino_by_default_and_native_only_when_enabled(
+    drop_grounding, reverse, expected_cond,
+):
+    router = make_blend_router(drop_grounding, reverse=reverse)
     _, tokens = router._predict_clean_from_noisy(
         torch.ones(2, 3, 2, 2), torch.full((2,), 0.75),
         torch.tensor([5, router.num_classes]),
     )
-    torch.testing.assert_close(tokens[:, 0, 0], torch.tensor([1.25, expected_null]))
+    expected_null = 2.0 if drop_grounding else expected_cond
+    torch.testing.assert_close(tokens[:, 0, 0], torch.tensor([expected_cond, expected_null]))
     assert router.dino_student.last_input is not None
 
 
-def test_rmsnorm_dropres_restores_full_normalized_native_tokens_at_all_timesteps():
-    router = make_blend_router(drop_grounding=True)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_rmsnorm_dropres_restores_full_normalized_native_tokens_at_all_timesteps(reverse):
+    router = make_blend_router(drop_grounding=True, reverse=reverse)
     enable_blend_rmsnorm(router)
     images = torch.zeros(6, 3, 2, 2)
     dino_tokens = torch.arange(1, 73, dtype=torch.float32).reshape(6, 4, 3)
@@ -285,7 +307,8 @@ def test_rmsnorm_dropres_restores_full_normalized_native_tokens_at_all_timesteps
     native = router.jit_pre_blend_norm(router.net.x_embedder(images))
     projected = router.dino_pre_blend_norm(dino_tokens)
     t = timesteps.view(-1, 1, 1)
-    torch.testing.assert_close(fused[~drop_mask], ((1 - t) * native + t * projected)[~drop_mask])
+    expected = t * native + (1 - t) * projected if reverse else (1 - t) * native + t * projected
+    torch.testing.assert_close(fused[~drop_mask], expected[~drop_mask])
     torch.testing.assert_close(fused[drop_mask], native[drop_mask])
     torch.testing.assert_close(diagnostics["jit_weighted_tokens"][drop_mask], native[drop_mask])
     assert diagnostics["dino_weighted_tokens"][drop_mask].count_nonzero() == 0
@@ -293,8 +316,9 @@ def test_rmsnorm_dropres_restores_full_normalized_native_tokens_at_all_timesteps
 
 
 @pytest.mark.parametrize("drop_all", [False, True])
-def test_rmsnorm_dropres_blocks_dino_gradients_only_for_dropped_samples(drop_all):
-    router = make_blend_router(drop_grounding=True)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_rmsnorm_dropres_blocks_dino_gradients_only_for_dropped_samples(drop_all, reverse):
+    router = make_blend_router(drop_grounding=True, reverse=reverse)
     enable_blend_rmsnorm(router)
     router.net.patch_size = 1
     router.dino_input_projector = TrainableScale(0.5)
@@ -308,16 +332,23 @@ def test_rmsnorm_dropres_blocks_dino_gradients_only_for_dropped_samples(drop_all
     assert dino_tokens.grad[drop_mask].count_nonzero() == 0
     projector_grad = router.dino_input_projector.input_proj.weight.grad
     assert projector_grad is not None
+    # All trainable paths remain connected even for an all-dropped batch.
+    for parameter in router.parameters():
+        assert parameter.grad is not None
+        assert torch.isfinite(parameter.grad).all()
+    assert router.jit_pre_blend_norm.weight.grad.abs().sum() > 0
     if drop_all:
         assert projector_grad.count_nonzero() == 0
+        assert router.dino_pre_blend_norm.weight.grad.count_nonzero() == 0
     else:
         assert dino_tokens.grad[~drop_mask].abs().sum() > 0
         assert projector_grad.abs().sum() > 0
 
 
 @pytest.mark.parametrize("timestep", [0.0, 0.75, 1.0])
-def test_rmsnorm_dropres_sampling_null_label_uses_the_same_native_only_rule(timestep):
-    router = make_blend_router(drop_grounding=True)
+@pytest.mark.parametrize("reverse", [False, True])
+def test_rmsnorm_dropres_sampling_null_label_uses_the_same_native_only_rule(timestep, reverse):
+    router = make_blend_router(drop_grounding=True, reverse=reverse)
     enable_blend_rmsnorm(router)
     images = torch.arange(1, 25, dtype=torch.float32).reshape(2, 3, 2, 2)
     _, tokens = router._predict_clean_from_noisy(
@@ -325,8 +356,45 @@ def test_rmsnorm_dropres_sampling_null_label_uses_the_same_native_only_rule(time
     )
     native = router.jit_pre_blend_norm(router.net.x_embedder(images))
     dino = router.dino_pre_blend_norm(images.flatten(2).transpose(1, 2))
-    torch.testing.assert_close(tokens[0], (1 - timestep) * native[0] + timestep * dino[0])
+    dino_weight = 1 - timestep if reverse else timestep
+    torch.testing.assert_close(tokens[0], (1 - dino_weight) * native[0] + dino_weight * dino[0])
     torch.testing.assert_close(tokens[1], native[1])
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("drop_grounding", [False, True])
+def test_cfg_velocity_uses_conditional_blend_and_matching_null_branch(reverse, drop_grounding):
+    router = make_blend_router(drop_grounding=drop_grounding, reverse=reverse)
+    enable_blend_rmsnorm(router)
+    router.cfg_scale = 2.7
+    router.cfg_interval = (0.0, 1.0)
+    router.t_eps = 0.05
+    with torch.no_grad():
+        router.jit_pre_blend_norm.weight.fill_(2.0)
+        router.dino_pre_blend_norm.weight.fill_(3.0)
+    seen = {}
+
+    def fake_jit(tokens, timesteps, labels, noisy_image):
+        seen["labels"] = labels
+        seen["timesteps"] = timesteps
+        return tokens.transpose(1, 2).reshape_as(noisy_image)
+
+    router._jit_forward_from_tokens = fake_jit
+    images = torch.arange(1, 25, dtype=torch.float32).reshape(2, 3, 2, 2)
+    timestep = 0.25
+    t = torch.full((2, 1, 1, 1), timestep)
+    velocity = router._forward_sample(images, t, torch.tensor([5, 7]))
+    native = router.jit_pre_blend_norm(router.net.x_embedder(images))
+    dino = router.dino_pre_blend_norm(images.flatten(2).transpose(1, 2))
+    dino_weight = 1 - timestep if reverse else timestep
+    cond = ((1 - dino_weight) * native + dino_weight * dino).transpose(1, 2).reshape_as(images)
+    uncond = native.transpose(1, 2).reshape_as(images) if drop_grounding else cond
+    expected = (uncond + router.cfg_scale * (cond - uncond) - images) / (1 - timestep)
+    torch.testing.assert_close(velocity, expected)
+    torch.testing.assert_close(seen["timesteps"], torch.full((4,), timestep))
+    assert torch.equal(seen["labels"], torch.tensor([5, 7, 1000, 1000]))
+    # Both conditional and null examples still execute the DINO path.
+    assert router.dino_student.last_input.shape[0] == 4
 
 
 @pytest.mark.parametrize("add_pos,expected", [(False, 10.0), (True, 11.0)])
@@ -503,10 +571,12 @@ def test_time_blend_reports_native_projected_weighted_and_fused_norms():
     assert metrics["jit_blended_token_norm"] == metrics["jit_input_token_norm"]
 
 
-def test_rmsnorm_dropres_training_uses_the_actual_label_drop_mask():
+@pytest.mark.parametrize("reverse", [False, True])
+def test_rmsnorm_dropres_training_uses_the_actual_label_drop_mask(reverse):
     router = make_preprocess_router(False)
     router.dino_jit_input_mode = "time_blend"
     router.dino_grounding_drop_on_label_drop = True
+    router.dino_time_blend_reverse = reverse
     enable_blend_rmsnorm(router)
     router.dino_input_projector = None
     router.net = nn.Module()
@@ -533,6 +603,12 @@ def test_rmsnorm_dropres_training_uses_the_actual_label_drop_mask():
     clean = torch.linspace(-1, 1, steps=24).reshape(2, 3, 2, 2)
     loss, metrics = router(clean, torch.tensor([3, 7]))
     native = router.jit_pre_blend_norm(router.net.x_embedder(clean))
+    dino = router.dino_pre_blend_norm(
+        router.dino_student.last_input.flatten(2).transpose(1, 2),
+    )
+    dino_weight = 0.25 if reverse else 0.75
+    expected_cond = (1 - dino_weight) * native + dino_weight * dino
+    torch.testing.assert_close(seen["tokens"][~drop_mask], expected_cond[~drop_mask])
     torch.testing.assert_close(seen["tokens"][drop_mask], native[drop_mask])
     assert torch.equal(seen["labels"], torch.tensor([3, 1000]))
     assert metrics["dino_grounding_drop_fraction"] == 0.5

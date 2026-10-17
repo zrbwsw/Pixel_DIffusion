@@ -7,6 +7,7 @@ J18-new-B 使用 DINOv3-B/16。student 和 teacher 均输入
 * student：LoRA-r64，预训练 patch embedding 可选择 fine-tune；
 * teacher：无 LoRA、完全冻结；
 * student 可取多层 MLS，teacher 始终使用 raw last。
+* student 可关闭最终 LN 的 affine；teacher 始终保留预训练 affine。
 
 DINOv3 使用由坐标生成的 RoPE，不存在可训练 absolute position embedding；当前
 接口因此只暴露 patch embedding 的 train/freeze 选择。
@@ -111,4 +112,7 @@ def build_encoder(args, *, role: str) -> nn.Module:
         train_patch_embed=bool(getattr(args, "dino_train_patch_embed", True)),
         train_cls_token=False,
         train_norm=False,
+        final_norm_affine=bool(
+            getattr(args, "dino_generation_final_norm_affine", True)
+        ),
     )

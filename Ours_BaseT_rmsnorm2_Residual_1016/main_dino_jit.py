@@ -157,6 +157,13 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
                         help="Zero-based DINOv3 layer indices used by mean/mls aggregation: "
                              "'last', 'last-4', '4,7,10,11', or 'default' "
                              "(RAEv2 defaults for the chosen encoder).")
+    parser.add_argument(
+        "--dino_generation_final_norm_affine",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep pretrained gamma/beta in the generation DINO's final LayerNorm. "
+             "Disable for the no-affine ablation; frozen alignment teacher is unchanged.",
+    )
     # Student uses the selected aggregation; frozen teacher always uses raw last.
     # ------------------------------------------------------------------
     # 2. DINO patch 对齐损失与特征预处理
@@ -204,6 +211,13 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         type=str,
         help="Project noisy DINO-LoRA tokens with official PixelDiT2 TimestepProjection "
              "before time_blend; separate from the alignment ConvProj.",
+    )
+    parser.add_argument(
+        "--dino_time_blend_reverse",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use DINO weight 1-t and JiT weight t instead of DINO t and JiT 1-t. "
+             "Only valid with time_blend; grounding dropout still sets DINO=0, JiT=1.",
     )
     parser.add_argument(
         "--dino_grounding_drop_on_label_drop",

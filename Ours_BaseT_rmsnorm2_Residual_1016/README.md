@@ -109,3 +109,56 @@ CUDA_VISIBLE_DEVICES='' PYTHONPATH=.:jit \
 Existing token-norm diagnostics remain after the branch-specific RMSNorm
 and before time weighting; the two learned gain vectors are saved in both
 training and EMA checkpoint state dictionaries.
+
+## 2026-10-17: three controlled four-GPU ablations
+
+These experiments use the trained rmsnorm2 B-80 recipe as the baseline and
+start from scratch in three new output directories. Each changes exactly one
+model control. The frozen DINOv3 alignment teacher, preprocessing, alignment
+loss, LoRA/MLS/PgT, and independent learned pre-blend RMSNorm gains retain
+the baseline settings.
+
+| Ablation | Control | DINO / JiT weights | Host and physical GPUs | Launcher under `scripts/` |
+|---|---|---|---|---|
+| Generation final LN no-affine | `dino_generation_final_norm_affine: false` | `t` / `1-t` | agent-gpu, 4–7 | `train_rmsnorm2_noaffine_B80_4gpu.sh` |
+| Reversed blend | `dino_time_blend_reverse: true` | `1-t` / `t` | agent-gpu-2, 0–3 | `train_rmsnorm2_reverse_B80_4gpu.sh` |
+| DropRes | `dino_grounding_drop_on_label_drop: true` | `t` / `1-t`; null label: `0` / `1` | agent-gpu-2, 4–7 | `train_rmsnorm2_dropres_B80_4gpu.sh` |
+
+The no-affine option removes gamma/beta only from the generation DINO's
+final output LayerNorm, retaining its normalization and epsilon. MLS calls
+this same output LN on its selected layers; DINO block LNs are unchanged.
+The frozen teacher retains its pretrained final LN gamma/beta and the
+existing rmsnorm2 teacher implementation. Both pre-blend RMSNorm gamma
+vectors remain trainable in every ablation.
+
+Reversing the blend changes only the two mixing coefficients: projector,
+JiT, flow target, and sampler still receive the original timestep.
+DropRes shares the actual label-drop mask (probability 0.1); for a dropped
+label, the normalized JiT branch has weight one and the DINO branch zero.
+CFG's null-label branch uses the same rule. DINO stays in the computation
+graph, including all-null batches, for consistent DDP parameter usage.
+
+Common training settings: **4 GPUs × batch 256 = global batch 1024**,
+accumulation 1, base LR 5e-5 (effective LR **2e-4**), 80 epochs, five warmup
+epochs, constant LR, AdamW (0.9, 0.95), weight decay 0, seed 0,
+EMA 0.9999/0.9996, horizontal flip 0.5. Online evaluation remains
+Heun50 / CFG1 / 50K images / generation batch 64 every 20 epochs.
+
+The YAML filenames use the original baseline name with, respectively,
+`-NoAffine-`, `Residual(1-t,t)`, and `-DropRes-`. Their `exp_name`,
+`output_dir`, `resume`, and metric filenames are independent of the baseline.
+
+Run the appropriate launcher on its assigned host:
+
+```bash
+bash scripts/train_rmsnorm2_noaffine_B80_4gpu.sh --preflight
+bash scripts/train_rmsnorm2_noaffine_B80_4gpu.sh
+```
+
+Each launcher creates a detached tmux session, checks the selected GPUs,
+uses a dedicated output lock and compilation cache, and records resolved
+resources, model controls, source hashes, and the command. Default launches
+start from scratch and refuse a populated output directory. `--resume`
+explicitly resumes that ablation's own `checkpoint-last.pth` after checking
+its model and training settings; it never uses the baseline checkpoint.
+The two GPU2 jobs use separate torchrun rendezvous ports via `--standalone`.

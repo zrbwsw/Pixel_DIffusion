@@ -173,6 +173,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
         train_norm: bool = False,
         aggregation: str = "none",
         layer_indices: Optional[Sequence[int]] = None,
+        final_norm_affine: bool = True,
     ):
         super().__init__()
         if aggregation not in self.SUPPORTED_AGGREGATIONS:
@@ -181,6 +182,31 @@ class DINOv3PatchTokenEncoder(nn.Module):
         self.model = load_dino_v3(model_name=model_name, weights_path=weights_path)
         self.embed_dim = int(getattr(self.model, "embed_dim",
                                      getattr(self.model, "num_features", 768)))
+        self.final_norm_affine = bool(final_norm_affine)
+        if not self.final_norm_affine:
+            # Replace only the output LN after loading the pretrained state.
+            # get_intermediate_layers(norm=True) also uses this LN for MLS.
+            # build_encoder applies this option only to the generation student;
+            # the frozen teacher keeps its original wrapper and pretrained LN.
+            norm = self.model.norm
+            if not isinstance(norm, nn.LayerNorm):
+                raise TypeError(
+                    "Removing final LN affine requires nn.LayerNorm; "
+                    f"got {type(norm).__name__}"
+                )
+            reference = next(norm.parameters(), None)
+            if reference is None:
+                reference = next(self.model.parameters(), None)
+            factory_kwargs = (
+                {"device": reference.device, "dtype": reference.dtype}
+                if reference is not None else {}
+            )
+            self.model.norm = nn.LayerNorm(
+                norm.normalized_shape,
+                eps=norm.eps,
+                elementwise_affine=False,
+                **factory_kwargs,
+            ).train(norm.training)
         self.use_lora = use_lora
         self.aggregation = aggregation
         self.num_lora_modules = 0
@@ -258,7 +284,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
         # [B,256,768] Tensor；梯度会从 MLS 和 raw-last 两条支路共同回到 student。
         n_arg = self._layer_indices if self._layer_indices is not None else 1
         outputs = self.model.get_intermediate_layers(
-            x, n=n_arg, reshape=False, return_class_token=False, norm=True, # 默认不会删除 γ、β，也不会把它们重置成 1、0。
+            x, n=n_arg, reshape=False, return_class_token=False, norm=True,
         )
         if (
             self._layer_indices is not None

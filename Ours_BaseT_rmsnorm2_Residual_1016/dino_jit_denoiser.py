@@ -96,6 +96,9 @@ class DINOJiTDenoiser(nn.Module):
         self.dino_grounding_drop_on_label_drop = bool(
             getattr(args, "dino_grounding_drop_on_label_drop", False)
         )
+        self.dino_time_blend_reverse = bool(
+            getattr(args, "dino_time_blend_reverse", False)
+        )
         self.dino_jit_pre_blend_rmsnorm = bool(
             getattr(args, "dino_jit_pre_blend_rmsnorm", False)
         )
@@ -117,6 +120,8 @@ class DINOJiTDenoiser(nn.Module):
                 f"Unknown dino_jit_input_mode={self.dino_jit_input_mode}. "
                 f"Expected one of {sorted(valid_input_modes)}"
             )
+        if self.dino_time_blend_reverse and self.dino_jit_input_mode != "time_blend":
+            raise ValueError("dino_time_blend_reverse requires time_blend.")
         self.net = JiT_models[args.model](
             input_size=args.img_size,
             in_channels=3,
@@ -425,7 +430,11 @@ class DINOJiTDenoiser(nn.Module):
 
         ``native [B,256,768] + g(t) [B,1,1] * residual [B,256,768]``.
 
-        ``time_blend`` instead computes ``(1-t)*native + t*projected_dino``.
+        ``time_blend`` computes ``(1-t)*native + t*projected_dino`` by default.
+        With ``dino_time_blend_reverse``, it computes
+        ``t*native + (1-t)*projected_dino``. This reverses only the blend
+        weights; JiT and the DINO input projector still receive the original
+        clean-image timestep, and both paths keep their own RMSNorm gains.
 
         If ``dino_residual_drop_on_label_drop`` is enabled, the residual gate
         is zeroed for dropped labels. In time_blend, optional grounding dropout
@@ -470,8 +479,13 @@ class DINOJiTDenoiser(nn.Module):
             if t.numel() != native_tokens.shape[0]:
                 raise ValueError("Expected one blend timestep per sample.")
             t = t.view(-1, 1, 1)
-            jit_weighted = (1.0 - t) * native_tokens
-            dino_weighted = t * projected_tokens
+            reverse = getattr(self, "dino_time_blend_reverse", False)
+            jit_weight = t if reverse else (1.0 - t)
+            dino_weight = (1.0 - t) if reverse else t
+            # Keep both paths in the graph even at zero blend weight or when
+            # every label is dropped, so DDP sees the same parameter usage.
+            jit_weighted = jit_weight * native_tokens
+            dino_weighted = dino_weight * projected_tokens
             grounding_drop_mask = torch.zeros(
                 t.shape[0], device=t.device, dtype=torch.bool,
             )
