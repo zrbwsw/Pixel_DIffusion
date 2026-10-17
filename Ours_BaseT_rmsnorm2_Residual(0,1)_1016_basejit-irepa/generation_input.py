@@ -4,6 +4,9 @@
 the generation DINO, attach hooks, or add parameters. The independent frozen
 alignment encoder is still constructed and used by iREPA's training entrypoint.
 
+``jit_rmsnorm`` adds only a learned RMSNorm to native patch tokens, without
+constructing a generation encoder. Its fixed (DINO, JiT) weights are (0, 1).
+
 ``rmsnorm2`` replaces only the output of JiT's native patch embedder, before the
 original forward adds its positional embedding. All subsequent JiT operations,
 alignment projection/loss, and sampling remain in the original implementation.
@@ -36,6 +39,28 @@ def _build_generation_encoder(args):
         aggregation="mls",
         layer_indices=[2, 5, 8, 11],
     )
+
+
+class JiTRMSNormInput(nn.Module):
+    """Normalize native patch tokens before APE; no DINO or timestep scaling."""
+
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        from util.model_util import RMSNorm
+
+        self.patch_norm = RMSNorm(hidden_size, eps=1e-6)
+
+    def forward(self, patch_tokens):
+        return self.patch_norm(patch_tokens)
+
+    def _replace_patch_tokens(self, module, inputs, output):
+        return self(output)
+
+    def install(self, net):
+        if hasattr(net, "generation_input"):
+            raise ValueError("JiT already has a generation input adapter.")
+        net.generation_input = self
+        net.x_embedder.register_forward_hook(self._replace_patch_tokens)
 
 
 class RMSNormGenerationInput(nn.Module):
@@ -125,22 +150,25 @@ class RMSNormGenerationInput(nn.Module):
 
 
 def build_denoiser(args):
-    """Build the exact baseline, or attach the optional rmsnorm2 generation path.
+    """Build the exact baseline, JiT-only RMSNorm, or dual-branch rmsnorm2 input.
 
     Required original Denoiser arguments are unchanged. Additional arguments:
-    generation_input_mode (baseline/rmsnorm2), dino_weights, dino_lora_r,
+    generation_input_mode (baseline/jit_rmsnorm/rmsnorm2), dino_weights, dino_lora_r,
     dino_lora_alpha, dino_lora_dropout, and dino_train_patch_embed. The caller
     must expose the bundled ``jit`` directory on sys.path, as its original
     entrypoint does, so its unmodified absolute imports resolve locally.
     """
     mode = str(getattr(args, "generation_input_mode", "baseline")).lower()
-    if mode not in {"baseline", "rmsnorm2"}:
+    if mode not in {"baseline", "jit_rmsnorm", "rmsnorm2"}:
         raise ValueError(f"Unknown generation_input_mode={mode!r}.")
 
     from denoiser import Denoiser
 
     denoiser = Denoiser(args)
     if mode == "baseline":
+        return denoiser
+    if mode == "jit_rmsnorm":
+        JiTRMSNormInput(denoiser.net.hidden_size).install(denoiser.net)
         return denoiser
 
     adapter = RMSNormGenerationInput(

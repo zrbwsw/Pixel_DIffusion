@@ -91,6 +91,112 @@ def test_baseline_has_native_classes_projector_and_no_generation_hooks(tiny_fact
     assert not any("generation_input" in name for name in model.state_dict())
 
 
+def test_jit_rmsnorm_adds_only_gain_without_changing_baseline_initialization(tiny_factory, monkeypatch):
+    import generation_input
+
+    def forbid_generation(args):
+        pytest.fail("JiT-only RMSNorm attempted to construct a generation encoder")
+
+    monkeypatch.setattr(generation_input, "_build_generation_encoder", forbid_generation)
+    torch.manual_seed(41)
+    baseline = tiny_factory("baseline")
+    rng = torch.get_rng_state().clone()
+    torch.manual_seed(41)
+    actual = tiny_factory("jit_rmsnorm")
+    torch.testing.assert_close(torch.get_rng_state(), rng, rtol=0, atol=0)
+    expected_state, actual_state = baseline.state_dict(), actual.state_dict()
+    assert actual_state.keys() - expected_state.keys() == {"net.generation_input.patch_norm.weight"}
+    assert not expected_state.keys() - actual_state.keys()
+    for name, value in expected_state.items():
+        torch.testing.assert_close(actual_state[name], value, rtol=0, atol=0)
+    gain = actual.net.generation_input.patch_norm.weight
+    torch.testing.assert_close(gain, torch.ones(48), rtol=0, atol=0)
+    assert gain.requires_grad
+    assert not hasattr(actual.net.generation_input, "dino")
+    assert not hasattr(actual.net.generation_input, "projector")
+    assert len(actual.net.x_embedder._forward_hooks) == 1
+    assert not actual.net._forward_pre_hooks
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_jit_rmsnorm_matches_channel_normalization_and_preserves_dtype(tiny_factory, dtype):
+    adapter = tiny_factory("jit_rmsnorm").net.generation_input
+    x = torch.randn(2, 4, 48).to(dtype)
+    with torch.no_grad():
+        adapter.patch_norm.weight.copy_(torch.linspace(0.5, 1.5, 48))
+    normalized = x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)
+    expected = (adapter.patch_norm.weight * normalized).to(dtype)
+    actual = adapter(x)
+    assert actual.dtype == dtype
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_jit_rmsnorm_hook_precedes_ape_without_time_or_label_scaling(tiny_factory):
+    net = tiny_factory("jit_rmsnorm").eval().net
+    noisy = torch.randn(1, 3, 32, 32).expand(3, -1, -1, -1).clone()
+    observed = {}
+
+    def save_fused(module, inputs, output):
+        observed["fused"] = output.detach().clone()
+
+    def save_block_input(module, inputs):
+        observed["block"] = inputs[0].detach().clone()
+
+    handles = [net.x_embedder.register_forward_hook(save_fused),
+               net.blocks[0].register_forward_pre_hook(save_block_input)]
+    with torch.no_grad():
+        raw = type(net.x_embedder).forward(net.x_embedder, noisy)
+        expected = net.generation_input.patch_norm(raw)
+        image, aligned, original = net(
+            noisy, torch.tensor([0.0, 0.35, 1.0]), torch.tensor([0, 1, 5]),
+        )
+    for handle in handles:
+        handle.remove()
+    torch.testing.assert_close(observed["fused"], expected, rtol=0, atol=0)
+    torch.testing.assert_close(observed["block"], expected + net.pos_embed, rtol=0, atol=0)
+    torch.testing.assert_close(observed["fused"][0], observed["fused"][2], rtol=0, atol=0)
+    torch.testing.assert_close(aligned[0], net.projectors[0](original[0]), rtol=0, atol=0)
+    assert image.shape == noisy.shape
+
+
+def test_jit_rmsnorm_original_training_ema_sampling_and_state_reload(tiny_factory):
+    model = tiny_factory("jit_rmsnorm").train()
+    nn.init.normal_(model.net.final_layer.linear.weight, std=0.02)
+    gain = model.net.generation_input.patch_norm.weight
+    initial_gain = gain.detach().clone()
+    parameters = list(model.parameters())
+    model.ema_params1 = [p.detach().clone() for p in parameters]
+    model.ema_params2 = [p.detach().clone() for p in parameters]
+    expected_ema1, expected_ema2 = initial_gain.clone(), initial_gain.clone()
+    optimizer = torch.optim.AdamW(parameters, lr=1e-4, betas=(0.9, 0.95), weight_decay=0.0)
+    for _ in range(2):
+        optimizer.zero_grad()
+        loss, metrics = model(torch.randn(2, 3, 32, 32), torch.tensor([1, 2]), [torch.randn(2, 4, 24)])
+        assert torch.isfinite(loss)
+        assert "cosine" in metrics and "denoise_loss" in metrics
+        loss.backward()
+        for name, parameter in model.named_parameters():
+            if parameter.requires_grad:
+                assert parameter.grad is not None, name
+                assert torch.isfinite(parameter.grad).all(), name
+        assert gain.grad.abs().sum() > 0
+        optimizer.step()
+        expected_ema1.mul_(model.ema_decay1).add_(gain.detach(), alpha=1 - model.ema_decay1)
+        expected_ema2.mul_(model.ema_decay2).add_(gain.detach(), alpha=1 - model.ema_decay2)
+        model.update_ema()
+    assert not torch.equal(gain, initial_gain)
+    gain_index = next(i for i, p in enumerate(parameters) if p is gain)
+    torch.testing.assert_close(model.ema_params1[gain_index], expected_ema1, rtol=0, atol=0)
+    torch.testing.assert_close(model.ema_params2[gain_index], expected_ema2, rtol=0, atol=0)
+    restored = tiny_factory("jit_rmsnorm").eval()
+    restored.load_state_dict(model.state_dict(), strict=True)
+    restored.cfg_scale = 2.9
+    restored.cfg_interval = (0.1, 1.0)
+    generated = restored.generate(torch.tensor([1, 2]))
+    assert generated.shape == (2, 3, 32, 32)
+    assert torch.isfinite(generated).all()
+
+
 def test_hook_blends_endpoints_before_original_ape_and_keeps_alignment(tiny_factory):
     model = tiny_factory().eval()
     net, adapter = model.net, model.net.generation_input

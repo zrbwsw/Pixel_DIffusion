@@ -29,11 +29,11 @@ from resource_paths import resource_root
 
 def get_args_parser():
     parser = argparse.ArgumentParser(
-        "Original JiT+iREPA with optional rmsnorm2 input",
+        "Original JiT+iREPA with optional input RMSNorm",
         parents=[original_main.get_args_parser()],
     )
     parser.set_defaults(data_path=None, report_to="tensorboard")
-    parser.add_argument("--generation_input_mode", choices=["baseline", "rmsnorm2"], default="baseline")
+    parser.add_argument("--generation_input_mode", choices=["baseline", "jit_rmsnorm", "rmsnorm2"], default="baseline")
     parser.add_argument("--expected_global_batch_size", type=int, default=512)
     parser.add_argument("--dino_weights", default=None)
     parser.add_argument("--dino_lora_r", type=int, default=64)
@@ -61,8 +61,8 @@ def parse_args(argv=None):
             setattr(args, key, str((PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()))
     if not args.enable_repa:
         raise ValueError("This project's controls require --enable_repa")
-    if args.enc_type != "dino-vit-b":
-        raise ValueError("These controlled experiments use the original DINOv1-B/16 alignment encoder (dino-vit-b)")
+    if args.enc_type not in {"dino-vit-b", "dinov3-vit-b16"}:
+        raise ValueError("Use DINOv1-B/16 (dino-vit-b) or DINOv3-B/16 (dinov3-vit-b16) for alignment")
     if args.expected_global_batch_size <= 0 or args.batch_size <= 0:
         raise ValueError("Batch sizes must be positive")
     if args.sampling_method not in ("heun", "euler"):
@@ -101,9 +101,20 @@ def prepare_runtime_assets(args):
         weights_root = Path("/data0/pretrain_models")
     fid_root = resource_root("FID_STATS_ROOT")
     hub = Path(os.environ.get("BASEJIT_TORCH_HUB", PROJECT_ROOT / ".cache/torch/hub")).expanduser().resolve()
-    dino_weight = weights_root / "dino_vitbase16_pretrain.pth"
-    _link_asset(PROJECT_ROOT / "SSL_code/dino", hub / "facebookresearch_dino_main")
-    _link_asset(dino_weight, hub / "checkpoints/dino_vitbase16_pretrain.pth")
+    if args.enc_type == "dino-vit-b":
+        dino_weight = weights_root / "dino_vitbase16_pretrain.pth"
+        _link_asset(PROJECT_ROOT / "SSL_code/dino", hub / "facebookresearch_dino_main")
+        _link_asset(dino_weight, hub / "checkpoints/dino_vitbase16_pretrain.pth")
+    else:
+        # Configure the unchanged upstream DINOv3 loader before it is imported.
+        repo = Path(os.environ.get("DINOV3_REPO_DIR") or os.environ.get("DINOV3_REPO") or PROJECT_ROOT / "SSL_code/dinov3").expanduser().resolve()
+        checkpoint_dir = Path(os.environ.get("DINOV3_CKPT_DIR") or weights_root).expanduser().resolve()
+        dino_weight = checkpoint_dir / "dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"
+        for required in (repo / "hubconf.py", dino_weight):
+            if not required.is_file():
+                raise FileNotFoundError(required)
+        os.environ["DINOV3_REPO_DIR"] = str(repo)
+        os.environ["DINOV3_CKPT_DIR"] = str(checkpoint_dir)
     # The unchanged torch-fidelity and original engine resolve these filenames.
     if args.online_eval or args.evaluate_gen:
         _link_asset(fid_root / f"jit_in{args.img_size}_stats.npz", JIT_ROOT / "fid_stats" / f"jit_in{args.img_size}_stats.npz")

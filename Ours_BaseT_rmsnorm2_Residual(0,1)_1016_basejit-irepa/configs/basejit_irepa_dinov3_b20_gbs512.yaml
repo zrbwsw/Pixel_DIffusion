@@ -1,0 +1,85 @@
+# No generation branch and no input RMSNorm; control for jit_rmsnorm mode.
+# Historical 20-epoch hyperparameters with DINOv3-B/16 alignment in both arms.
+experiment:
+  exp_name: basejit-irepa-dinov3-B-20-gbs512
+  output_dir: checkpoints/basejit-irepa-dinov3-B-20-gbs512
+  resume: ''
+
+data:
+  data_path: null
+  img_size: 256
+  class_num: 1000
+  num_workers: 12
+  pin_mem: true
+
+model:
+  model: JiT-B/16
+  attn_dropout: 0.0
+  proj_dropout: 0.0
+  generation_input_mode: baseline
+
+generation:
+  dino_weights: null
+
+alignment:
+  enable_repa: true
+  enc_type: dinov3-vit-b16
+  encoder_depth: 4
+  projector_dim: 2048
+  projection_layer_type: conv
+  proj_kwargs_kernel_size: 3
+  projection_loss_type: cosine
+  proj_coeff: '0.5'
+  spnorm_method: zscore
+  cls_token_weight: 0.2
+  zscore_alpha: 0.8
+  zscore_proj_skip_std: false
+
+diffusion:
+  P_mean: -0.8
+  P_std: 0.8
+  noise_scale: 1.0
+  t_eps: 0.05
+  label_drop_prob: 0.1
+
+optimization:
+  epochs: 20
+  warmup_epochs: 5
+  batch_size: 128
+  expected_global_batch_size: 512
+  lr: null
+  blr: 0.00005
+  min_lr: 0.0
+  lr_schedule: constant
+  weight_decay: 0.0
+  ema_decay1: 0.9999
+  ema_decay2: 0.9996
+
+checkpointing:
+  start_epoch: 0
+  save_interval: 20
+  save_last_freq: 5
+
+evaluation:
+  online_eval: true
+  evaluate_gen: false
+  eval_freq: 20
+  sampling_method: heun
+  num_sampling_steps: 50
+  cfg: 2.9
+  interval_min: 0.1
+  interval_max: 1.0
+  num_images: 50000
+  gen_bsz: 256
+  sample_grid: false
+  sample_grid_freq: 20
+  sample_grid_n_images: 64
+
+logging:
+  log_freq: 100
+  report_to: tensorboard
+
+runtime:
+  device: cuda
+  seed: 0
+  dist_url: env://
