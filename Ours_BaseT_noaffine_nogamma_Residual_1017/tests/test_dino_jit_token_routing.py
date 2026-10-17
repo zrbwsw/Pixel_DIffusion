@@ -66,6 +66,10 @@ class RecordingEncoder(nn.Module):
         super().__init__()
         self.last_input = None
 
+    def preprocess(self, raw_images):
+        from jit.models.dinov3_loader import make_dinov3_transform
+        return make_dinov3_transform(resize_size=raw_images.shape[-1])(raw_images)
+
     def forward(self, images):
         self.last_input = images.detach().clone()
         return images.flatten(2).transpose(1, 2)
@@ -149,7 +153,7 @@ def test_label_drop_zeros_only_residual_path_during_sampling():
     router.dino_grounding_drop_on_label_drop = False
     router.dino_preprocess_input = False
     router.num_classes = 1000
-    router.dino_student = RecordingEncoder()
+    router.dino_generation = RecordingEncoder()
     router.net = nn.Module()
     router.net.x_embedder = ConstantPatchEmbedder(2.0)
     router.dino_residual_adapter = ScaleTokens(3.0)
@@ -169,7 +173,7 @@ def make_blend_router(drop_grounding=False):
     router.dino_residual_drop_on_label_drop = False
     router.dino_preprocess_input = False
     router.num_classes = 1000
-    router.dino_student = RecordingEncoder()
+    router.dino_generation = RecordingEncoder()
     router.net = nn.Module()
     router.net.x_embedder = ConstantPatchEmbedder(2.0)
     router.dino_input_projector = None
@@ -214,7 +218,7 @@ def test_cfg_null_label_uses_dino_by_default_and_native_only_when_enabled(drop_g
         torch.tensor([5, router.num_classes]),
     )
     torch.testing.assert_close(tokens[:, 0, 0], torch.tensor([1.25, expected_null]))
-    assert router.dino_student.last_input is not None
+    assert router.dino_generation.last_input is not None
 
 
 def test_rmsnorm_dropres_restores_full_normalized_native_tokens_at_all_timesteps():
@@ -335,23 +339,23 @@ def make_preprocess_router(enabled):
     router.dino_jit_input_mode = "replace"
     router.dino_residual_drop_on_label_drop = False
     router.dino_grounding_drop_on_label_drop = False
-    router.dino_student = RecordingEncoder()
-    router._teacher_box = [RecordingEncoder()]
-    router._teacher_device = torch.device("cpu")
+    router.dino_generation = RecordingEncoder()
+    router._alignment_encoder_box = [RecordingEncoder()]
+    router._alignment_encoder_device = torch.device("cpu")
     router.register_buffer("dino_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
     router.register_buffer("dino_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
     return router
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled):
+def test_generation_toggle_does_not_affect_alignment(enabled):
     router = make_preprocess_router(enabled)
     router.label_drop_prob = 0.0
     router.num_classes = 1000
     router.noise_scale = 1.0
     router.t_eps = 0.05
     router.dino_zscore_alpha = 0.8
-    router.dino_student_projector = nn.Identity()
+    router.alignment_projector = nn.Identity()
     router.sample_t = lambda n, device: torch.full((n,), 0.5, device=device)
     noisy_seen = []
 
@@ -366,16 +370,62 @@ def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled
     loss, metrics = router(clean, torch.tensor([3, 7]))
 
     train_input = router._preprocess_for_dino(noisy_seen[0]) if enabled else noisy_seen[0]
-    torch.testing.assert_close(router.dino_student.last_input, train_input)
-    torch.testing.assert_close(router.teacher.last_input, router._preprocess_for_dino(clean))
-    assert router.teacher.last_input.requires_grad is False
+    torch.testing.assert_close(router.dino_generation.last_input, train_input)
+    torch.testing.assert_close(router.alignment_encoder.last_input, router._preprocess_for_dino(clean))
+    assert router.alignment_encoder.last_input.requires_grad is False
     assert loss.item() == pytest.approx(metrics["denoise_loss"] + 0.5 * metrics["alignment_loss"], abs=1e-5)
     assert metrics["alignment_loss_weighted"] == pytest.approx(0.5 * metrics["alignment_loss"])
 
     noisy = torch.full_like(clean, 0.25)
     router._predict_clean_from_noisy(noisy, torch.full((2,), 0.5), torch.tensor([3, 7]))
     sample_input = router._preprocess_for_dino(noisy) if enabled else noisy
-    torch.testing.assert_close(router.dino_student.last_input, sample_input)
+    torch.testing.assert_close(router.dino_generation.last_input, sample_input)
+
+
+def test_alignment_extraction_is_no_grad_eval_and_sampling_never_calls_it():
+    router = make_preprocess_router(False)
+    router.alignment_encoder.train()
+    clean = torch.linspace(-1, 1, steps=24).reshape(2, 3, 2, 2).requires_grad_(True)
+    target = router._encode_alignment_target(clean)
+    assert target.requires_grad is False
+    assert target.grad_fn is None
+    assert router.alignment_encoder.training is False
+    torch.testing.assert_close(
+        target, router._preprocess_for_dino(clean).flatten(2).transpose(1, 2),
+    )
+
+    def forbidden_alignment(*args, **kwargs):
+        raise AssertionError("Sampling must not use the iREPA regularization encoder")
+
+    router.alignment_encoder.forward = forbidden_alignment
+    router.alignment_encoder.preprocess = forbidden_alignment
+    router._jit_forward_from_tokens = lambda tokens, *args, **kwargs: torch.zeros_like(clean)
+    prediction, _ = router._predict_clean_from_noisy(
+        torch.zeros_like(clean), torch.full((2,), 0.5), torch.tensor([3, 7]),
+    )
+    assert prediction.shape == clean.shape
+
+
+def test_functional_module_names_preserve_diagnostics_and_exclude_alignment_weights():
+    router = make_router()
+    router.dino_generation = nn.Module()
+    router.dino_generation.patch_embed = nn.Linear(3, 3)
+    router.alignment_projector = nn.Linear(3, 3)
+    regularizer = nn.Linear(3, 3).requires_grad_(False)
+    router._alignment_encoder_box = [regularizer]
+    parameters = dict(router.named_parameters())
+    assert set(parameters) == {
+        "dino_generation.patch_embed.weight", "dino_generation.patch_embed.bias",
+        "alignment_projector.weight", "alignment_projector.bias",
+    }
+    assert not set(map(id, regularizer.parameters())).intersection(map(id, router.parameters()))
+    assert set(router.state_dict()) == set(parameters)
+    assert {name for name, _ in _iter_named_parameters_by_group(router, "dino_patch_embed")} == {
+        "dino_generation.patch_embed.weight", "dino_generation.patch_embed.bias",
+    }
+    assert {name for name, _ in _iter_named_parameters_by_group(router, "alignment_projector")} == {
+        "alignment_projector.weight", "alignment_projector.bias",
+    }
 
 
 def test_t_moment_normalization_matches_diffusion_moments():
@@ -396,7 +446,7 @@ def test_t_moment_normalization_matches_diffusion_moments():
         ], dtype=torch.float32,
     )
     timesteps = torch.tensor([0.0, 1.0])
-    actual = router._preprocess_noisy_student_for_dino(noisy, timesteps)
+    actual = router._preprocess_noisy_generation_for_dino(noisy, timesteps)
     mean_t = torch.tensor(
         [
             [[[0.0]], [[0.0]], [[0.0]]],
@@ -412,13 +462,13 @@ def test_t_moment_normalization_matches_diffusion_moments():
     torch.testing.assert_close(actual, (noisy - mean_t) / std_t)
 
 
-def test_t_moment_student_requires_timesteps():
+def test_t_moment_generation_requires_timesteps():
     router = make_router()
     router.dino_input_normalization = "t_moment"
     router.dino_preprocess_input = True
-    router.dino_student = RecordingEncoder()
+    router.dino_generation = RecordingEncoder()
     with pytest.raises(ValueError, match="requires diffusion timesteps"):
-        router._encode_noisy_student(torch.zeros(1, 3, 2, 2))
+        router._encode_generation_tokens(torch.zeros(1, 3, 2, 2))
 
 
 def test_time_blend_reports_native_projected_weighted_and_fused_norms():
@@ -432,7 +482,7 @@ def test_time_blend_reports_native_projected_weighted_and_fused_norms():
     router.noise_scale = 1.0
     router.t_eps = 0.05
     router.dino_zscore_alpha = 0.8
-    router.dino_student_projector = nn.Identity()
+    router.alignment_projector = nn.Identity()
     router.sample_t = lambda n, device: torch.full((n,), 0.5, device=device)
     router.jit_alignment_depth = 4
     router._jit_forward_from_tokens = lambda tokens, _, __, noisy_image, alignment_depth: (
@@ -462,7 +512,7 @@ def test_rmsnorm_dropres_training_uses_the_actual_label_drop_mask():
     router.noise_scale = 1.0
     router.t_eps = 0.05
     router.dino_zscore_alpha = 0.8
-    router.dino_student_projector = nn.Identity()
+    router.alignment_projector = nn.Identity()
     router.jit_alignment_depth = 4
     router.sample_t = lambda n, device: torch.full((n,), 0.75, device=device)
     drop_mask = torch.tensor([False, True])
@@ -486,7 +536,7 @@ def test_rmsnorm_dropres_training_uses_the_actual_label_drop_mask():
     assert torch.isfinite(loss)
 
 
-def test_alignment_is_fixed_negative_cosine_with_spatial_teacher_normalization():
+def test_alignment_is_fixed_negative_cosine_with_spatial_alignment_normalization():
     router = make_router()
     router.dino_zscore_alpha = 0.0
     tokens = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])

@@ -4,21 +4,23 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 
 ## GitHub 同步范围
 
-仓库 `zrbwsw/Pixel_DIffusion` 发布以下三个版本的代码、配置、脚本、测试及必要
-第三方源码，不上传实验输出、数据集、预训练权重或评测资源。三个版本使用相同依赖，
+仓库 `zrbwsw/Pixel_DIffusion` 发布以下四个版本的代码、配置、脚本、测试及必要
+第三方源码，不上传实验输出、数据集、预训练权重或评测资源。各版本使用相同依赖，
 根目录 `require.txt` 引用原版本的依赖；也可使用各版本自己的 `require.txt`。
 
-| 版本 | 融合前的 RMSNorm |
+| 版本 | 主要区别 |
 | --- | --- |
 | [`Ours_BaseT_Residual_1008/`](Ours_BaseT_Residual_1008/) | 原始实现；启用时两路共享可学习通道权重。 |
 | [`Ours_BaseT_rmsnorm2_Residual_1016/`](Ours_BaseT_rmsnorm2_Residual_1016/) | DINO、JiT 各自学习独立的通道权重。 |
 | [`Ours_BaseT_nogamma_Residual_1016/`](Ours_BaseT_nogamma_Residual_1016/) | affine-free per-token RMSNorm，无可学习 gamma。 |
+| [`Ours_BaseT_noaffine_nogamma_Residual_1017/`](Ours_BaseT_noaffine_nogamma_Residual_1017/) | 无 gamma 融合 RMSNorm；仅生成 DINO-LoRA 去最终 LN affine，独立 iREPA 正则化编码器保留预训练 LN。 |
 
-两个新版本的远端安装、预检、训练和采样参见 [部署说明](REMOTE_SETUP.md)。
+可移植版本的远端安装、预检、训练和采样参见 [部署说明](REMOTE_SETUP.md)。
+1017 修正版的功能分工和旧 checkpoint 限制参见其 [README](Ours_BaseT_noaffine_nogamma_Residual_1017/README.md)。
 原版本的历史部署说明位于 [remote_setup.md](Ours_BaseT_Residual_1008/readme/remote_setup.md)。
 远端使用 `scripts/train_portable.sh` 选择 GPU 和资源路径，不要直接使用本机专用脚本。
 
-以下为原始服务器的完整工作区说明；除上面列出的三个版本外，其他方法和资源目录不会随 Git clone 下载。
+以下为原始服务器的完整工作区说明；除上面列出的四个版本外，其他方法和资源目录不会随 Git clone 下载。
 
 `Pixel_Diffusion` 是当前项目根目录。相关工作的源码、论文资料、实验记录、评测资源和我们的方法实现分开放置；以下只列非隐藏目录。
 
@@ -39,6 +41,7 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 | `Ours_BaseT_Residual_1008/` | BaseT + Residual 方法，以及 PgT、时间融合和 NoDDTHead 消融实验。 |
 | `Ours_BaseT_rmsnorm2_Residual_1016/` | 两路独立可学习 RMSNorm 的 NoDDTHead 版本。 |
 | `Ours_BaseT_nogamma_Residual_1016/` | 两路融合前使用无 gamma RMSNorm 的 NoDDTHead 版本。 |
+| `Ours_BaseT_noaffine_nogamma_Residual_1017/` | 生成空间 DINO-LoRA 使用无 affine 最终 LN；iREPA 编码器独立提供保留原始预训练 LN 的正则化目标。 |
 
 ## Ours 目录命名
 

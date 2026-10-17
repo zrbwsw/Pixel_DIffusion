@@ -3,10 +3,10 @@
 J18-new 使用 DINOv3-B/16：12 blocks、patch=16、embed_dim=768。对 256x256 图像，
 patch embedding 产生 16x16 网格，即每层 patch token 为 ``[B,256,768]``。
 
-student 对 block [2,5,8,11] 使用 RAEv2 MLS：选中层逐元素平均，再加最后一个
-选中层的空间均值广播；teacher 因 student-only 配置保持 raw last layer。
-与 RAEv2 默认 encoder 一致：加载预训练权重后，将最终 LN 替换为无仿射
-LayerNorm；student/teacher 均移除 γ、β，保留 LN 运算及 block 内部的 LN。
+生成编码器对 block [2,5,8,11] 使用 RAEv2 MLS：选中层逐元素平均，再加最后
+一个选中层的空间均值广播。加载预训练权重后，按 RAEv2 默认逻辑将最终 LN
+替换为无仿射 LayerNorm，保留 LN 运算及 block 内部的 LN。
+iREPA 对齐编码器使用独立封装，不经过这里的 LoRA、MLS 或去 affine 操作。
 
 Reference:
   - RAEv2/src/encoders/vision_encoder.py :: DINOv3MultiLayerSimpleAddEncoder
@@ -187,7 +187,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
                                      getattr(self.model, "num_features", 768)))
         # Match RAEv2 DINOv3Encoder.load_model: strip only the final LN affine
         # after loading pretrained weights; keep LayerNorm (default eps=1e-5).
-        # This applies to both the LoRA student and the frozen teacher.
+        # Generation branch only; the iREPA alignment encoder has its own wrapper.
         self.model.norm = nn.LayerNorm(self.embed_dim, elementwise_affine=False)
         self.use_lora = use_lora
         self.aggregation = aggregation
@@ -205,8 +205,8 @@ class DINOv3PatchTokenEncoder(nn.Module):
                     raise ValueError(f"layer index {i} out of [0, {total_blocks})")
         self._total_blocks = total_blocks
 
-        # 先冻结整套预训练 DINOv3。student 随后注入 LoRA，并可选择 fine-tune
-        # 预训练 PatchEmbed Conv2d；teacher 保持全部 requires_grad=False。
+        # 先冻结整套预训练 DINOv3。生成分支随后注入 LoRA，并可选择 fine-tune
+        # 预训练 PatchEmbed Conv2d；iREPA 正则化编码器不使用这个构造函数。
         # DINOv3 的空间位置信息来自按坐标计算的 RoPE，不存在可解冻的 pos_embed
         # 参数，因此这里有意不提供 train_pos_embed 配置。
         for param in self.model.parameters():
@@ -247,11 +247,11 @@ class DINOv3PatchTokenEncoder(nn.Module):
 
         * ``aggregation='none'``：标准最后一层 normalized token；
         * ``mean/mls``：通过 ``get_intermediate_layers(..., norm=True)`` 取多层；
-        * ``return_last_raw=True``：除 MLS 外额外返回未聚合的最后一层，供
-          alignment-only ConvProj 使用。
+        * ``return_last_raw=True``：额外返回本生成编码器未聚合的最后一层，
+          用于诊断；它不是独立 iREPA 编码器的正则化目标。
 
-        这里不会返回 CLS/register token；上层各 patch 可以和 teacher 的同一空间
-        位置一一计算 cosine loss。
+        这里不会返回 CLS/register token；输出用于生成路径的 JiT 输入构建。
+        iREPA 对齐的是 JiT 中间特征，而非两个 DINO 编码器之间的蒸馏。
         """
         # Single-layer fast path：只返回 DINOv3 最后一层 normalized patch tokens。
         if self.aggregation == "none" and self._layer_indices is None:
@@ -264,7 +264,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
             return patch_tokens
 
         # 多层路径：J18-new n_arg=[2,5,8,11]，outputs 是 4 个
-        # [B,256,768] Tensor；梯度会从 MLS 和 raw-last 两条支路共同回到 student。
+        # [B,256,768] Tensor；生成路径仍保留到 LoRA/patch embedding 的梯度。
         n_arg = self._layer_indices if self._layer_indices is not None else 1
         outputs = self.model.get_intermediate_layers(
             x, n=n_arg, reshape=False, return_class_token=False, norm=True,

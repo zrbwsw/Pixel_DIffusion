@@ -4,7 +4,7 @@
 “适配器”完成三件事：
 
 1. 在导入路径中加入项目根目录和 ``jit/``，从而复用原始 ``main_jit.py``；
-2. 将 JiT 默认的 ``Denoiser`` 替换为包含 DINO student/teacher、LoRA、
+2. 将 JiT 默认的 ``Denoiser`` 替换为包含生成编码器、iREPA 正则化编码器、LoRA、
    对齐损失和可选 DDTHead 的 ``DINOJiTDenoiser``；
 3. 将 JiT 默认的 HF Arrow 数据集构造器替换为兼容 raw ImageNet
    ``train/val`` 目录和 iREPA HF Arrow 目录的实现。
@@ -157,30 +157,30 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
                         help="Zero-based DINOv3 layer indices used by mean/mls aggregation: "
                              "'last', 'last-4', '4,7,10,11', or 'default' "
                              "(RAEv2 defaults for the chosen encoder).")
-    # Student uses the selected aggregation; frozen teacher always uses raw last.
+    # The generation encoder uses the selected aggregation; frozen alignment encoder always uses raw last.
     # ------------------------------------------------------------------
     # 2. DINO patch 对齐损失与特征预处理
     # ------------------------------------------------------------------
     parser.add_argument(
         "--dino_preprocess_input", action=argparse.BooleanOptionalAction,
         default=True,
-        help="Apply (x+1)/2 and ImageNet mean/std to the noisy DINO-LoRA student input. "
-             "The frozen clean-image teacher is always preprocessed.",
+        help="Apply (x+1)/2 and ImageNet mean/std to the noisy DINO-LoRA generation encoder input. "
+             "The frozen clean-image alignment encoder is always preprocessed.",
     )
     parser.add_argument(
         "--dino_input_normalization",
         default="standard",
         choices=["standard", "t_moment"],
         type=str,
-        help="Noisy student input normalization: fixed ImageNet statistics or "
+        help="Noisy generation encoder input normalization: fixed ImageNet statistics or "
              "analytic t-dependent diffusion moments.",
     )
-    # Teacher target uses spatial z-score before the fixed negative-cosine loss.
+    # iREPA target uses spatial z-score before the fixed negative-cosine loss.
     parser.add_argument(
         "--dino_zscore_alpha",
         default=0.8,
         type=float,
-        help="Teacher spatial-mean subtraction strength.",
+        help="iREPA target spatial-mean subtraction strength.",
     )
     # DINO token 替代 JiT 原始 patch embedding 后，是否继续加 JiT 的固定绝对位置编码。
     # 在 gated_residual 模式中该开关必须为 True，APE 会在 native+residual 融合后
@@ -188,7 +188,7 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument("--jit_add_pos_embed_to_dino_tokens", action=argparse.BooleanOptionalAction, default=True)
 
     # DINO 与 JiT 的输入接口。native 是纯 JiT+iREPA 消融：DINO 只作为冻结
-    # teacher 产生对齐目标，不构建 noisy-image student，也不向 JiT 注入 token。
+    # iREPA encoder 产生对齐目标，不构建 noisy-image generation encoder，也不向 JiT 注入 token。
     # time_blend 在原生 JiT 与投影后的 DINO token 之间按 (1-t) 和 t 插值；
     # 旧模式保持原样。
     parser.add_argument(
@@ -240,7 +240,7 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     )
 
     # ------------------------------------------------------------------
-    # 3. student token 投影与对齐来源
+    # 3. JiT alignment token 投影与对齐来源
     # ------------------------------------------------------------------
     # Fixed ConvProj on the captured JiT block output.
     parser.add_argument(
@@ -254,11 +254,11 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         "--jit_alignment_depth",
         default=4,
         type=int,
-        help="One-based JiT block depth captured for teacher alignment.",
+        help="One-based JiT block depth captured for iREPA alignment.",
     )
 
     # ------------------------------------------------------------------
-    # 4. DINO student 的 LoRA 容量
+    # 4. DINO generation encoder 的 LoRA 容量
     # ------------------------------------------------------------------
     # r 决定低秩瓶颈维度；alpha/r 是 LoRA residual 的有效缩放；dropout 只作用于
     # LoRA 分支。target_modules 是逗号分隔的被注入线性层名称。
@@ -272,7 +272,7 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     # ------------------------------------------------------------------
     # BooleanOptionalAction 同时提供 --foo 与 --no-foo。DINOv3 的预训练 patch
     # embedding 可以选择 fine-tune；空间位置由无可训练参数的 RoPE 提供，因此没有
-    # train_pos_embed 开关。CLS token 和末端 norm 仍可独立控制，teacher 始终冻结。
+    # train_pos_embed 开关。生成分支 CLS token 冻结、最终 LN 无参数；iREPA 编码器全部冻结。
     parser.add_argument("--dino_train_patch_embed", action=argparse.BooleanOptionalAction, default=True)
 
     # ------------------------------------------------------------------

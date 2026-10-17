@@ -29,7 +29,7 @@ model:
     attn_dropout: 0.0
     proj_dropout: 0.0
     jit_add_pos_embed_to_dino_tokens: true
-  dino_student:
+  dino_generation:
     dino_model_name: dinov3_vitb16
     dino_preprocess_input: true
     dino_input_normalization: t_moment

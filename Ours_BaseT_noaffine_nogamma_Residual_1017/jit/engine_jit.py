@@ -120,8 +120,8 @@ def _iter_named_parameters_by_group(model_without_ddp, group):
         alignment_depth = getattr(model_without_ddp, "jit_alignment_depth", None)
         is_ddt_head = name.startswith("ddt_head.")
         is_lora = ("lora_A" in name) or ("lora_B" in name)
-        is_dino_encoder = name.startswith("dino_student.")
-        is_alignment_projector = name.startswith("dino_student_projector.")
+        is_dino_encoder = name.startswith("dino_generation.")
+        is_alignment_projector = name.startswith("alignment_projector.")
         is_input_projector = name.startswith("dino_input_projector.")
         is_residual_adapter = name.startswith("dino_residual_adapter.")
         is_dino_patch_embed = is_dino_encoder and ".patch_embed." in name
@@ -257,7 +257,7 @@ def train_one_epoch(
 
     J18-new 两卡 H100 示例：DataLoader 每 rank 给 ``x uint8 [128,3,256,256]``、
     ``labels [128]``；world_size=2、accum_iter=1，因此有效全局 batch=256。
-    Teacher target 和 iREPA loss 均在 ``DINOJiTDenoiser.forward`` 内部完成。
+    iREPA 正则化目标及其 loss 均在 ``DINOJiTDenoiser.forward`` 内部完成。
     """
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")

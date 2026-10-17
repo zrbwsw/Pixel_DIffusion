@@ -315,8 +315,8 @@ def main(args):
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
     model_without_ddp = model.module
 
-    # AdamW 更新 JiT、DDTHead、DINO LoRA 及显式解冻的 student 参数；frozen
-    # teacher 不在 named_parameters 中，也不会进入 optimizer/checkpoint/EMA。
+    # AdamW 更新 JiT、DDTHead、DINO LoRA 及显式解冻的 generation encoder 参数；frozen
+    # iREPA encoder 不在 named_parameters 中，也不会进入 optimizer/checkpoint/EMA。
     param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
     print(optimizer)

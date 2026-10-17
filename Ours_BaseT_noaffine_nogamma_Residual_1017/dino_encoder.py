@@ -1,12 +1,12 @@
-"""J18-new 的 DINOv3 student/teacher 构建与按角色配置。
+"""按功能独立构建生成空间编码器与 iREPA 正则化编码器。
 
-J18-new-B 使用 DINOv3-B/16。student 和 teacher 均输入
+J18-new-B 使用 DINOv3-B/16。两条独立路径均输入
 ``[B, 3, 256, 256]``，patch size 16 产生 ``16x16=256`` 个 768 维 token。
-关键差异由 ``role`` 决定：
 
-* student：LoRA-r64，预训练 patch embedding 可选择 fine-tune；
-* teacher：无 LoRA、完全冻结；
-* student 可取多层 MLS，teacher 始终使用 raw last。
+* generation：塑造生成空间；LoRA、可训练 patch embedding、无仿射最终 LN、可选 MLS。
+* alignment：提供 iREPA 正则化目标；原始预训练 LN、无 LoRA/MLS、冻结 raw-last。
+
+两者只共享模型类型和预训练加载工具，不共享模型实例，也不是蒸馏关系。
 
 DINOv3 使用由坐标生成的 RoPE，不存在可训练 absolute position embedding；当前
 接口因此只暴露 patch embedding 的 train/freeze 选择。
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import torch.nn as nn
 
+from dino_alignment_encoder import DINOv3AlignmentEncoder
 from dino_v3_lora import (
     DINOv3PatchTokenEncoder,
     RAEV2_DEFAULT_LAYERS,
@@ -61,46 +62,18 @@ def _resolve_dinov3_layers(args, total_blocks_hint: int = 12):
     return aggregation, indices
 
 
-def _resolve_dinov3_layers_for_role(args, role: str, total_blocks_hint: int = 12):
-    """按 teacher/student 角色解析聚合配置。
-
-    Teacher 始终返回 raw-last；student 按配置聚合多层 token。
-    """
-
-    if role == "teacher":
-        return "none", None
-    return _resolve_dinov3_layers(args, total_blocks_hint)
-
-
-def build_encoder(args, *, role: str) -> nn.Module:
-    """构建 frozen teacher 或带 LoRA 的 trainable student。"""
-
-    if role not in ("teacher", "student"):
-        raise ValueError(f"role must be 'teacher' or 'student', got {role!r}")
-
+def build_generation_encoder(args) -> nn.Module:
+    """生成路径：LoRA + RAEv2 风格无 affine 最终 LN / 可选 MLS。"""
     model_name = _validate_model_name(
         getattr(args, "dino_model_name", "dinov3_vitb16")
     )
     weights = getattr(args, "dino_weights", None) or None
-    aggregation, layer_indices = _resolve_dinov3_layers_for_role(args, role)
-
-    common_kwargs = dict(
+    aggregation, layer_indices = _resolve_dinov3_layers(args)
+    return DINOv3PatchTokenEncoder(
         model_name=model_name,
         weights_path=weights,
         aggregation=aggregation,
         layer_indices=layer_indices,
-    )
-    if role == "teacher":
-        return DINOv3PatchTokenEncoder(
-            **common_kwargs,
-            use_lora=False,
-            train_patch_embed=False,
-            train_cls_token=False,
-            train_norm=False,
-        )
-
-    return DINOv3PatchTokenEncoder(
-        **common_kwargs,
         use_lora=True,
         lora_r=int(getattr(args, "dino_lora_r", 16)),
         lora_alpha=float(getattr(args, "dino_lora_alpha", 16.0)),
@@ -111,4 +84,16 @@ def build_encoder(args, *, role: str) -> nn.Module:
         train_patch_embed=bool(getattr(args, "dino_train_patch_embed", True)),
         train_cls_token=False,
         train_norm=False,
+    )
+
+
+def build_alignment_encoder(args) -> nn.Module:
+    """iREPA 路径：独立加载未改 final LN 的预训练 DINOv3。
+
+    不读取生成路径的 LoRA、MLS 或输入标准化设置。
+    """
+    return DINOv3AlignmentEncoder(
+        model_name=_validate_model_name(getattr(args, "dino_model_name", "dinov3_vitb16")),
+        weights_path=getattr(args, "dino_weights", None) or None,
+        resolution=int(getattr(args, "img_size", 256)),
     )

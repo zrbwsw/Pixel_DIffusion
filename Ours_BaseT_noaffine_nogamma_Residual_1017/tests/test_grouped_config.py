@@ -32,7 +32,7 @@ def _parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config")
     parser.add_argument("--depth", type=int, default=8, choices=[4, 8])
-    parser.add_argument("--use_teacher", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use_alignment", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--name", type=str, default="baseline")
     return parser
 
@@ -50,13 +50,13 @@ def _args(name, *overrides):
 def test_grouped_yaml_and_cli_override(tmp_path):
     config = tmp_path / "experiment.yaml"
     config.write_text(
-        "model:\n  depth: 4\nalignment:\n  use_teacher: false\nrun:\n  name: yaml\n",
+        "model:\n  depth: 4\nalignment:\n  use_alignment: false\nrun:\n  name: yaml\n",
         encoding="utf-8",
     )
     args = parse_args_with_config(
-        _parser(), ["--config", str(config), "--name", "cli", "--use_teacher"]
+        _parser(), ["--config", str(config), "--name", "cli", "--use_alignment"]
     )
-    assert (args.depth, args.name, args.use_teacher) == (4, "cli", True)
+    assert (args.depth, args.name, args.use_alignment) == (4, "cli", True)
 
 
 def test_pretrain_models_root_is_expanded(tmp_path, monkeypatch):
@@ -145,7 +145,7 @@ def test_preprocess_flag_defaults_on_and_cli_can_disable_yaml_value():
     assert _args(RESIDUAL, "--dino_preprocess_input").dino_preprocess_input is True
 
 
-def test_residual_dinotnorm_only_changes_noisy_student_normalization():
+def test_residual_dinotnorm_only_changes_noisy_generation_normalization():
     residual, dinotnorm = _args(RESIDUAL), _args(RESIDUAL_DINOTNORM)
     assert residual.dino_input_normalization == "standard"
     assert dinotnorm.dino_input_normalization == "t_moment"
@@ -200,7 +200,7 @@ def test_offline_sampling_preserves_preprocess_setting(tmp_path):
     import yaml
 
     config = yaml.safe_load((ROOT / "configs" / f"{RESIDUAL}.yaml").read_text(encoding="utf-8"))
-    config["model"]["dino_student"]["dino_preprocess_input"] = False
+    config["model"]["dino_generation"]["dino_preprocess_input"] = False
     config_path = tmp_path / "no-preprocess.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     checkpoint_path = tmp_path / "checkpoint-80.pth"
@@ -335,7 +335,8 @@ def test_native_patch_embed_trainability_and_residual_initialization(monkeypatch
     monkeypatch.setitem(dino_jit_denoiser.JiT_models, args.model, lambda **_: TinyJiT())
     monkeypatch.setattr(dino_jit_denoiser, "JiTDDTHead", TinyModule)
     monkeypatch.setattr(dino_jit_denoiser, "ProjectionLayer", TinyModule)
-    monkeypatch.setattr(dino_jit_denoiser, "build_encoder", lambda *_args, **_: TinyEncoder())
+    monkeypatch.setattr(dino_jit_denoiser, "build_generation_encoder", lambda *_args, **_: TinyEncoder())
+    monkeypatch.setattr(dino_jit_denoiser, "build_alignment_encoder", lambda *_args, **_: TinyEncoder())
 
     model = DINOJiTDenoiser(args)
     assert all(p.requires_grad == train_native for p in model.net.x_embedder.parameters())
@@ -353,12 +354,12 @@ def test_native_patch_embed_trainability_and_residual_initialization(monkeypatch
         assert isinstance(model.dino_input_projector, TimestepProjection)
         assert any(p.requires_grad for p in model.dino_input_projector.parameters())
     elif name == NATIVE:
-        assert model.dino_student is None
+        assert model.dino_generation is None
         assert model.dino_residual_adapter is None
         assert model.dino_input_projector is None
-        assert model.dino_student_projector is not None
+        assert model.alignment_projector is not None
         assert model.ddt_head is not None
-        assert any(p.requires_grad for p in model.dino_student_projector.parameters())
+        assert any(p.requires_grad for p in model.alignment_projector.parameters())
     else:
         assert model.dino_residual_adapter is None
         assert model.dino_input_projector is None

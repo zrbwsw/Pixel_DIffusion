@@ -1,8 +1,8 @@
 # Pure JiT+iREPA(DINOv3)+DDTHead ablation.
 #
 # native mode sends only JiT's own noisy-image PatchEmbed tokens into the JiT
-# trunk. There is no noisy DINO student, residual adapter, or PgT input path.
-# DINOv3 is loaded only as a frozen clean-image teacher for block-4 iREPA.
+# trunk. There is no noisy DINO generation encoder, residual adapter, or PgT input path.
+# DINOv3 is loaded only as a frozen clean-image alignment encoder for block-4 iREPA.
 
 experiment:
   exp_name: BaseT-noResidual-irepa(DINOv3)-DDTHead-B-80
@@ -23,7 +23,7 @@ model:
     attn_dropout: 0.0
     proj_dropout: 0.0
     jit_add_pos_embed_to_dino_tokens: true
-  dino_student:
+  dino_generation:
     dino_model_name: dinov3_vitb16
     dino_preprocess_input: true
     dino_input_normalization: standard
@@ -38,7 +38,7 @@ model:
     dino_residual_hidden_dim: 0
     dino_residual_drop_on_label_drop: false
   lora:
-    # Retained as parser defaults only; native mode does not build a student.
+    # Retained as parser defaults only; native mode does not build a generation encoder.
     dino_lora_r: 64
     dino_lora_alpha: 64.0
     dino_lora_dropout: 0.0

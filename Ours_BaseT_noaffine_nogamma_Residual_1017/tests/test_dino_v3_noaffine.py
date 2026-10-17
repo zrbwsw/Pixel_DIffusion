@@ -7,8 +7,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import dino_alignment_encoder
 import dino_v3_lora
-from dino_encoder import build_encoder
+from dino_encoder import build_alignment_encoder, build_generation_encoder
 from dino_lora import LoRALinear
 from dino_v3_lora import DINOv3PatchTokenEncoder
 
@@ -121,31 +122,64 @@ def test_final_ln_removes_pretrained_affine_without_touching_block_norms(fake_mo
     assert "model.blocks.0.norm2.bias" in encoder.state_dict()
 
 
-@pytest.mark.parametrize("role", ["student", "teacher"])
-def test_build_encoder_applies_noaffine_to_both_roles_and_preserves_trainability(fake_model, role):
+def test_generation_builder_removes_final_affine_and_preserves_trainability(fake_model):
     args = SimpleNamespace(
         dino_model_name="dinov3_vitb16", dino_aggregation="mls", dino_layers="default",
         dino_lora_r=2, dino_lora_alpha=2.0, dino_train_patch_embed=True,
     )
-    encoder = build_encoder(args, role=role)
+    encoder = build_generation_encoder(args)
 
     _assert_no_final_affine(encoder)
     assert encoder.model.cls_token.requires_grad is False
-    if role == "teacher":
-        assert encoder.aggregation == "none"
-        assert encoder._layer_indices is None
-        assert encoder.use_lora is False
-        assert encoder.num_lora_modules == 0
-        assert not any(parameter.requires_grad for parameter in encoder.parameters())
-        assert not any(isinstance(module, LoRALinear) for module in encoder.modules())
-    else:
-        assert encoder.aggregation == "mls"
-        assert encoder._layer_indices == [2, 5, 8, 11]
-        assert encoder.use_lora is True
-        assert encoder.num_lora_modules == 12 * 4
-        for name, parameter in encoder.named_parameters():
-            expected_trainable = name.startswith("model.patch_embed.") or "lora_" in name
-            assert parameter.requires_grad == expected_trainable, name
+    assert encoder.aggregation == "mls"
+    assert encoder._layer_indices == [2, 5, 8, 11]
+    assert encoder.use_lora is True
+    assert encoder.num_lora_modules == 12 * 4
+    for name, parameter in encoder.named_parameters():
+        expected_trainable = name.startswith("model.patch_embed.") or "lora_" in name
+        assert parameter.requires_grad == expected_trainable, name
+
+
+def test_generation_and_alignment_use_independent_models_and_final_norms(monkeypatch):
+    loaded_models = []
+    original_norms = []
+
+    def load_model(**kwargs):
+        # Match separate loads of the same pretrained checkpoint.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(20261017)
+            model = _FakeDINOv3()
+        loaded_models.append(model)
+        original_norms.append(model.norm)
+        return model
+
+    monkeypatch.setattr(dino_v3_lora, "load_dino_v3", load_model)
+    monkeypatch.setattr(dino_alignment_encoder, "load_dino_v3", load_model)
+    args = SimpleNamespace(
+        dino_model_name="dinov3_vitb16", dino_aggregation="mls", dino_layers="default",
+        dino_lora_r=2, dino_lora_alpha=2.0, dino_train_patch_embed=True, img_size=4,
+    )
+    generation = build_generation_encoder(args)
+    alignment = build_alignment_encoder(args)
+
+    assert len(loaded_models) == 2
+    assert generation.model is loaded_models[0]
+    assert alignment.model is loaded_models[1]
+    assert generation.model is not alignment.model
+    generation_parameters = {id(parameter) for parameter in generation.parameters()}
+    assert not generation_parameters.intersection(id(parameter) for parameter in alignment.parameters())
+    _assert_no_final_affine(generation)
+    assert generation.model.norm is not original_norms[0]
+    assert alignment.model.norm is original_norms[1]
+    torch.testing.assert_close(alignment.model.norm.weight, torch.linspace(0.4, 1.8, 8))
+    torch.testing.assert_close(alignment.model.norm.bias, torch.linspace(-0.5, 0.7, 8))
+    assert all(not parameter.requires_grad for parameter in alignment.parameters())
+    assert not any(isinstance(module, LoRALinear) for module in alignment.modules())
+    assert any(isinstance(module, LoRALinear) for module in generation.modules())
+    original_alignment_patch = alignment.model.patch_embed.weight.detach().clone()
+    with torch.no_grad():
+        generation.model.patch_embed.weight.add_(0.5)
+    torch.testing.assert_close(alignment.model.patch_embed.weight, original_alignment_patch)
 
 
 @pytest.mark.parametrize("aggregation", ["none", "mean", "mls"])
@@ -190,7 +224,7 @@ def test_nonfinal_mls_selection_still_returns_noaffine_actual_last_layer(fake_mo
     assert all(call[1:] == (False, False, True) for call in fake_model.intermediate_calls)
 
 
-def test_noaffine_student_preserves_patch_embed_and_lora_gradients(fake_model):
+def test_noaffine_generation_preserves_patch_embed_and_lora_gradients(fake_model):
     encoder = DINOv3PatchTokenEncoder(
         use_lora=True, lora_r=2, lora_alpha=2.0, train_patch_embed=True,
         aggregation="mls", layer_indices=[2, 5, 8, 11],

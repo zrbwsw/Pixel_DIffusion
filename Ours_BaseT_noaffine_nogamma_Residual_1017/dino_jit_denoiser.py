@@ -2,11 +2,11 @@
 
 这个文件把四个模块接成一条可训练的数据流：
 
-1. 带噪图像 ``z`` 进入 DINOv3-B/16-LoRA student；
-2. BaseT 路径由 student MLS token 替换 JiT patch token；residual 路径
+1. 带噪图像 ``z`` 进入 DINOv3-B/16-LoRA 生成空间编码器；
+2. BaseT 路径由生成编码器 MLS token 替换 JiT patch token；residual 路径
    保留 JiT 原生 PatchEmbed，并叠加由 ``t`` 门控的 DINO representation residual；
    time_blend 路径以 ``1-t``/``t`` 融合原生 token 与 timestep-projector
-   输出；从 JiT 指定 block 的空间输出经独立 projector 对齐 frozen teacher；
+   输出；JiT 中间层经独立 projector 接受 iREPA 编码器提供的正则化监督；
 3. JiT-B 的空间输出交给 DDTHead，或通过原生 final_layer 直接预测像素；
 4. 输出 ``x_pred``，再换算成 rectified-flow velocity 计算去噪损失。
 
@@ -15,16 +15,16 @@ batch 256 在两卡 H100 上对应 ``B=128``，在四卡上通常对应 ``B=64``
 
 * image / noise / z / x_pred: ``[B, 3, 256, 256]``
 * DINOv3-B patch grid: ``16 x 16``，因此 ``N=256``
-* DINOv3-B raw-last、MLS、teacher token: ``[B, 256, 768]``
+* DINOv3-B raw-last、MLS、iREPA target token: ``[B, 256, 768]``
 * JiT-B 空间 token: ``[B, 256, 768]``；插入 32 个类别 token 后为
   ``[B, 288, 768]``
 * DDTHead condition: ``[B, 256, 768] -> [B, 256, 2048]``
 * DDTHead patch prediction: ``[B, 256, 16*16*3=768]``
 
 当前 ``Ours-J18-new-drop0.1-l4-B`` 配置使用一基 ``jit_alignment_depth=4``：
-捕获 JiT block index 3 的输出，经 ``3x3 ConvProj`` 对齐 teacher。这个对齐
-projector 不参与 JiT 输入融合；带噪 student 的输入可使用固定 ImageNet 标准化
-或与扩散时间相关的解析矩标准化，clean teacher 始终使用固定标准化。
+捕获 JiT block index 3 的输出，经 ``3x3 ConvProj`` 对齐 iREPA 特征。这个对齐
+projector 不参与 JiT 输入融合；生成编码器输入可使用固定 ImageNet 标准化或
+时间相关解析矩标准化。iREPA 编码器独立使用原版 clean-image 预处理及预训练 LN。
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pixeldit2_projector import TimestepProjection
 from projectors import ProjectionLayer
 from util.model_util import RMSNorm
 
-from dino_encoder import build_encoder
+from dino_encoder import build_alignment_encoder, build_generation_encoder
 from jit_ddt_head import JiTDDTHead
 
 
@@ -69,9 +69,9 @@ class DINOResidualAdapter(nn.Module):
 class DINOJiTDenoiser(nn.Module):
     """可切换 image-token source 和 DDT/native 输出头的 JiT 像素去噪器。
 
-    frozen teacher 被有意放在普通 Python list 中，而不是注册为 ``nn.Module``
-    子模块。这样 DDP、优化器、EMA 和 checkpoint 只处理可训练 student/JiT/head，
-    teacher 仅在需要 target 时手动搬到设备。
+    冻结的 iREPA 正则化编码器放在普通 Python list 中，不注册为模型子模块。
+    DDP、优化器、EMA 和 checkpoint 不包含它；只在计算对齐目标时手动搬到设备。
+    生成编码器属于可训练生成路径，与 iREPA 编码器不构成蒸馏关系。
     """
 
     def __init__(self, args):
@@ -197,7 +197,7 @@ class DINOJiTDenoiser(nn.Module):
         if self.dino_aggregation == "none" and layers_spec not in {"", "none"}:
             raise ValueError("dino_layers is unused when dino_aggregation=none.")
         if self.dino_aggregation != "none" and layers_spec in {"", "none"}:
-            raise ValueError("dino_layers is required for student aggregation.")
+            raise ValueError("dino_layers is required for generation feature aggregation.")
         if not 1 <= self.jit_alignment_depth <= len(self.net.blocks):
             raise ValueError(
                 f"jit_alignment_depth={self.jit_alignment_depth} is invalid for "
@@ -206,20 +206,20 @@ class DINOJiTDenoiser(nn.Module):
         if self.dino_zscore_alpha < 0:
             raise ValueError("dino_zscore_alpha must be non-negative.")
 
-        teacher = build_encoder(args, role="teacher")
-        teacher.eval()
-        for param in teacher.parameters():
+        alignment_encoder = build_alignment_encoder(args)
+        alignment_encoder.eval()
+        for param in alignment_encoder.parameters():
             param.requires_grad_(False)
-        self._teacher_box = [teacher]
-        self._teacher_device: Optional[torch.device] = None
+        self._alignment_encoder_box = [alignment_encoder]
+        self._alignment_encoder_device: Optional[torch.device] = None
 
-        # The native iREPA ablation has no noisy DINO student at all. DINOv3 is
-        # used only as the frozen clean-image teacher for block-4 alignment.
-        self.dino_student: Optional[nn.Module] = None
+        # Native iREPA has no DINO generation path; its frozen DINO is used only
+        # for clean-image regularization targets, never for generation inputs.
+        self.dino_generation: Optional[nn.Module] = None
         if self.dino_jit_input_mode != "native":
-            self.dino_student = build_encoder(args, role="student")
-        dino_feature_dim = int(teacher.embed_dim)
-        self.dino_student_projector = ProjectionLayer(
+            self.dino_generation = build_generation_encoder(args)
+        dino_feature_dim = int(alignment_encoder.embed_dim)
+        self.alignment_projector = ProjectionLayer(
             "conv",
             hidden_size=self.net.hidden_size,
             z_dim=dino_feature_dim,
@@ -247,10 +247,10 @@ class DINOJiTDenoiser(nn.Module):
             if self.dino_jit_pre_blend_rmsnorm
             else nn.Identity()
         )
-        if self.dino_student is not None and int(self.dino_student.embed_dim) != self.net.hidden_size:
-            raise ValueError("DINO student token width must match JiT hidden size.")
-        if int(teacher.embed_dim) != dino_feature_dim:
-            raise ValueError("DINO teacher and alignment projector widths must match.")
+        if self.dino_generation is not None and int(self.dino_generation.embed_dim) != self.net.hidden_size:
+            raise ValueError("DINO generation token width must match JiT hidden size.")
+        if int(alignment_encoder.embed_dim) != dino_feature_dim:
+            raise ValueError("iREPA encoder and alignment projector widths must match.")
 
         self.use_ddt_head = bool(getattr(args, "use_ddt_head", True))
         self.ddt_head: Optional[nn.Module] = None
@@ -288,18 +288,18 @@ class DINOJiTDenoiser(nn.Module):
         self.register_buffer("dino_std_pm1", 2.0 * std, persistent=False)
 
     @property
-    def teacher(self) -> nn.Module:
-        # Teacher 与 student 都由 DINOv3PatchTokenEncoder 构建，并共享
-        # forward_patch_tokens 接口；teacher 本身不注册进 checkpoint。
-        if not self._teacher_box:
-            raise RuntimeError("This DINOJiTDenoiser was constructed without a teacher.")
-        return self._teacher_box[0]
+    def alignment_encoder(self) -> nn.Module:
+        # Separate iREPA wrapper: no LoRA/MLS or removal of pretrained LN affine.
+        # Kept outside model registration/checkpoints, as in the iREPA workflow.
+        if not self._alignment_encoder_box:
+            raise RuntimeError("This DINOJiTDenoiser has no iREPA alignment encoder.")
+        return self._alignment_encoder_box[0]
 
-    def _ensure_teacher_device(self, device: torch.device) -> None:
-        if self._teacher_device != device:
-            self.teacher.to(device)
-            self._teacher_device = device
-        self.teacher.eval()
+    def _ensure_alignment_device(self, device: torch.device) -> None:
+        if self._alignment_encoder_device != device:
+            self.alignment_encoder.to(device)
+            self._alignment_encoder_device = device
+        self.alignment_encoder.eval()
 
     def _preprocess_for_dino(self, x: torch.Tensor) -> torch.Tensor:
         """把扩散像素域 ``[-1,1]`` 转成 DINO ImageNet 标准化输入。
@@ -330,7 +330,7 @@ class DINOJiTDenoiser(nn.Module):
         z = torch.randn(n, device=device) * self.P_std + self.P_mean
         return torch.sigmoid(z)
 
-    def _preprocess_noisy_student_for_dino(
+    def _preprocess_noisy_generation_for_dino(
         self, noisy_z: torch.Tensor, timesteps: torch.Tensor
     ) -> torch.Tensor:
         """Normalize ``z_t`` with the analytic moments of the diffusion path.
@@ -366,42 +366,46 @@ class DINOJiTDenoiser(nn.Module):
         std_t = variance_t.sqrt().clamp_min(1e-6)
         return (z_float - mean_t) / std_t
 
-    def _encode_noisy_student(
+    def _encode_generation_tokens(
         self, noisy_z: torch.Tensor, timesteps: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
-        if self.dino_student is None:
-            raise RuntimeError("The native iREPA mode has no noisy DINO student.")
+        if self.dino_generation is None:
+            raise RuntimeError("The native iREPA mode has no DINO generation encoder.")
         input_normalization = getattr(self, "dino_input_normalization", "standard")
         if input_normalization == "t_moment":
             if timesteps is None:
                 raise ValueError("t_moment normalization requires diffusion timesteps.")
-            student_input = self._preprocess_noisy_student_for_dino(noisy_z, timesteps)
+            generation_input = self._preprocess_noisy_generation_for_dino(noisy_z, timesteps)
         elif self.dino_preprocess_input:
-            student_input = self._preprocess_for_dino(noisy_z)
+            generation_input = self._preprocess_for_dino(noisy_z)
         else:
-            student_input = noisy_z
-        return self.dino_student(student_input)
+            generation_input = noisy_z
+        return self.dino_generation(generation_input)
 
-    def _encode_dino_pair(
+    def _encode_generation_and_alignment(
         self,
         clean_x: torch.Tensor,
         noisy_z: torch.Tensor,
         timesteps: Optional[torch.Tensor] = None,
     ) -> tuple[Optional[torch.Tensor], torch.Tensor]:
-        student_tokens = (
+        generation_tokens = (
             None
             if self.dino_jit_input_mode == "native"
-            else self._encode_noisy_student(noisy_z, timesteps)
+            else self._encode_generation_tokens(noisy_z, timesteps)
         )
-        return student_tokens, self._encode_teacher_target(clean_x)
+        return generation_tokens, self._encode_alignment_target(clean_x)
 
-    def _encode_teacher_target(self, clean_x: torch.Tensor) -> torch.Tensor:
-        self._ensure_teacher_device(clean_x.device)
+    def _encode_alignment_target(self, clean_x: torch.Tensor) -> torch.Tensor:
+        self._ensure_alignment_device(clean_x.device)
         with torch.no_grad():
-            return self.teacher(self._preprocess_for_dino(clean_x)).detach()
+            # iREPA preprocess consumes raw [0,255] images, not diffusion pixels.
+            # Keep /255 -> antialiased resize -> ImageNet normalization unchanged.
+            raw_images = (clean_x.float() + 1.0) * 127.5
+            normalized = self.alignment_encoder.preprocess(raw_images)
+            return self.alignment_encoder(normalized).detach()
 
-    def _project_student_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        return self.dino_student_projector(tokens)
+    def _project_alignment_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        return self.alignment_projector(tokens)
 
     def _compose_jit_input_tokens(
         self,
@@ -413,7 +417,7 @@ class DINOJiTDenoiser(nn.Module):
         """Build the spatial JiT input before its fixed positional embedding.
 
         ``native`` uses only ``net.x_embedder(noisy_image)`` and is the pure
-        JiT+iREPA ablation; its DINO teacher is used only by the alignment loss.
+        JiT+iREPA ablation; its DINO alignment encoder is used only by that loss.
 
         ``replace`` preserves all historical experiments. ``gated_residual``
         computes, for B-scale ImageNet-256,
@@ -653,11 +657,11 @@ class DINOJiTDenoiser(nn.Module):
         timesteps: torch.Tensor,
         labels: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """采样时执行 noisy image-token source -> JiT -> head，不运行 teacher。"""
-        student_tokens = (
+        """采样仅运行生成路径 -> JiT -> head，不运行 iREPA 正则化编码器。"""
+        generation_tokens = (
             None
             if self.dino_jit_input_mode == "native"
-            else self._encode_noisy_student(noisy_z, timesteps)
+            else self._encode_generation_tokens(noisy_z, timesteps)
         )
         label_drop_mask = (
             labels == self.num_classes
@@ -665,7 +669,7 @@ class DINOJiTDenoiser(nn.Module):
             else None
         )
         jit_tokens, _ = self._compose_jit_input_tokens(
-            noisy_z, student_tokens, timesteps, label_drop_mask=label_drop_mask,
+            noisy_z, generation_tokens, timesteps, label_drop_mask=label_drop_mask,
         )
         x_pred = self._jit_forward_from_tokens(jit_tokens, timesteps.flatten(), labels, noisy_image=noisy_z)
         return x_pred, jit_tokens
@@ -697,15 +701,15 @@ class DINOJiTDenoiser(nn.Module):
         v = (x - z) / (1.0 - t).clamp_min(self.t_eps)
 
         residual_diagnostics: Optional[dict[str, torch.Tensor]] = None
-        student_tokens, target_tokens = self._encode_dino_pair(x, z, t)
+        generation_tokens, target_tokens = self._encode_generation_and_alignment(x, z, t)
         jit_tokens, residual_diagnostics = self._compose_jit_input_tokens(
-            z, student_tokens, t, label_drop_mask=label_drop_mask,
+            z, generation_tokens, t, label_drop_mask=label_drop_mask,
         )
         x_pred, projector_input_tokens = self._jit_forward_from_tokens(
             jit_tokens, t.flatten(), labels_dropped, noisy_image=z,
             alignment_depth=self.jit_alignment_depth,
         )
-        align_tokens = self._project_student_tokens(projector_input_tokens)
+        align_tokens = self._project_alignment_tokens(projector_input_tokens)
         projector_output_tokens = align_tokens
         # 模型显式预测 clean x，再用同一解析关系转换为 velocity 监督。
         v_pred = (x_pred - z) / (1.0 - t).clamp_min(self.t_eps)
@@ -747,9 +751,9 @@ class DINOJiTDenoiser(nn.Module):
                 "t_min": t.detach().float().min().item(),
                 "t_max": t.detach().float().max().item(),
             }
-            if student_tokens is not None:
-                student_tokens_f = student_tokens.detach().float()
-                loss_dict["dino_student_token_norm"] = student_tokens_f.norm(dim=-1).mean().item()
+            if generation_tokens is not None:
+                generation_tokens_f = generation_tokens.detach().float()
+                loss_dict["dino_generation_token_norm"] = generation_tokens_f.norm(dim=-1).mean().item()
             if self.dino_jit_input_mode == "native" and residual_diagnostics is not None:
                 loss_dict["native_jit_patch_token_norm"] = residual_diagnostics[
                     "native_tokens"
