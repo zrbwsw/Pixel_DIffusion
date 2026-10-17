@@ -8,6 +8,7 @@
 !/Ours_BaseT_Residual_1008/
 !/Ours_BaseT_rmsnorm2_Residual_1016/
 !/Ours_BaseT_nogamma_Residual_1016/
+!/Ours_BaseT_noaffine_nogamma_Residual_1017/
 
 # Never publish credentials or machine-local configuration.
 .env
@@ -25,6 +26,7 @@ credentials*.json
 **/.git.*
 !/Ours_BaseT_rmsnorm2_Residual_1016/.gitignore
 !/Ours_BaseT_nogamma_Residual_1016/.gitignore
+!/Ours_BaseT_noaffine_nogamma_Residual_1017/.gitignore
 .venv/
 venv/
 __pycache__/
