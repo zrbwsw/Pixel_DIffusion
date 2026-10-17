@@ -1,0 +1,32 @@
+{
+  "irepa_commit": "99ad4ac234efe8de52ce157120f72856e836d09f",
+  "rmsnorm2_parent_commit": "ebaf806",
+  "dino_commit": "7c446df5b9f45747937fb0d72314eb9f7b66930a",
+  "notes": "jit Python files are byte-identical to local iREPA commit. DINO files are unmodified official facebookresearch/dino sources. Historical log does not identify its training revision.",
+  "sha256": {
+    "jit/dataset.py": "8fc3531963d0d7e160a032dae565a0ab7c5e27dafb45b625c3aa3a4fb5aa51eb",
+    "jit/denoiser.py": "c74ab8006c70e440714c15242153a3caab702c952f1e9c818d014fc025035df6",
+    "jit/engine_jit.py": "00cee02a1bcec6b20d6c59b129567d1b0f26eb1f8a11b33c7de4c510310f9b58",
+    "jit/main_jit.py": "c2604f9f6fb187cc95852b1834933bdf876b4b312975db38d944660687ac4983",
+    "jit/model_jit.py": "b4f915a22dd0bb192cfc99077eddc25986aa380582de62c62beb66e43cb6461c",
+    "jit/models/clip_vit.py": "120bbbf5ca8f751a0109f6d9238fc538a4942381f21d0df7e57127491c14ba6f",
+    "jit/models/dinov3_loader.py": "9cca66896b91e0e156f736a29acdf749066eb46b83298c010bda90b099b2f161",
+    "jit/models/jepa.py": "0e3f8cefcd78b984bc40cbdb814006cc31ae07105f90388cf1cc3384bb120723",
+    "jit/models/mae_vit.py": "1f53846e34709fded52cc802844cac476631d6efbf279643e0e18c5453402ca4",
+    "jit/models/mocov3_vit.py": "15d0c0e4fbf631da33af0ed12dc57cfad8aaa52225a3e5dc905fbbac038a5405",
+    "jit/models/pe.py": "894320ffe2433a4a85ac8445f6213a9f121d447ba9160a4c795e373d5266c71d",
+    "jit/models/pe_config.py": "673d59462cce04af72cd6987e58a032a9a4fe207eb2eb1fa4906b7235cacebb7",
+    "jit/models/rope.py": "6ac24a5da12f952d709c66abb2b86c951072ff84c66c654b111f5602c6ed204b",
+    "jit/projection_loss.py": "05eea4a3b9732c045f0c7445c632ba9f83cda6b72a70a2ceaa3ed9a590a4c20c",
+    "jit/projectors.py": "b7b4e18749d52b8edda3511ec23c034bd2c7f6d1aec1a30dd3b7c2ae1e255e09",
+    "jit/spnorm.py": "8d73e99de3ef3e05947e01444b9cd470b34e597a907b9d2ead3f3e86f554ebfe",
+    "jit/util/crop.py": "08da8c1300202e66773806085fcaf2415acf1e38ac8923d5cdf79cafd770ccb6",
+    "jit/util/lr_sched.py": "47765fbc75affedb8c8c062d8b784fd00a6ee4527c8a82edb8cf514235d7e048",
+    "jit/util/misc.py": "0e91e82210582785d475bbc968a6effc589d77880c43ec315e01ac78740b3003",
+    "jit/util/model_util.py": "f4f35cc86a41b374d9e3654c8a2cddc12fbb11d41a28d24f05cf667c008b912e",
+    "jit/vision_encoder.py": "499f1520cb549d8cc5fe249c5601a73a684c9872def12f2c26045bc418c82af1",
+    "SSL_code/dino/hubconf.py": "fa80babf82c71d2123e23b05061eb1991a1fbc9877238f250b2a25023e910f72",
+    "SSL_code/dino/vision_transformer.py": "b1f998d5f49ab43666b9fc6d007c5f6540c3ead2e8645e144f74045f63ff44d7",
+    "SSL_code/dino/utils.py": "962a97e1acda1c986dfd921275325e4083f9016dddadcf018f1ccf03fa600eab"
+  }
+}
