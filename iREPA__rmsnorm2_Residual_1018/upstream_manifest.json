@@ -1,0 +1,36 @@
+{
+  "base": "../iREPA (local adapted snapshot, 2026-10-18)",
+  "generation_source": "../Ours_BaseT_rmsnorm2_Residual_1016",
+  "unchanged_irepa": {
+    "jit/dataset.py": "e29ddae5d4348a6a9fb5797ca864aadb08a71c70072a8153da2d881ef19838d7",
+    "jit/denoiser.py": "c74ab8006c70e440714c15242153a3caab702c952f1e9c818d014fc025035df6",
+    "jit/engine_jit.py": "24f093d56622403b884adb2dc6c9f296243662226b3fe79e60ab41e8559713fa",
+    "jit/main_jit.py": "07168ebca8de641ce2512837264a2b331f9550d399774991c6770c2cbaf3e3c5",
+    "jit/model_jit.py": "b4f915a22dd0bb192cfc99077eddc25986aa380582de62c62beb66e43cb6461c",
+    "jit/models/clip_vit.py": "120bbbf5ca8f751a0109f6d9238fc538a4942381f21d0df7e57127491c14ba6f",
+    "jit/models/dinov3_loader.py": "9cca66896b91e0e156f736a29acdf749066eb46b83298c010bda90b099b2f161",
+    "jit/models/jepa.py": "0e3f8cefcd78b984bc40cbdb814006cc31ae07105f90388cf1cc3384bb120723",
+    "jit/models/mae_vit.py": "1f53846e34709fded52cc802844cac476631d6efbf279643e0e18c5453402ca4",
+    "jit/models/mocov3_vit.py": "15d0c0e4fbf631da33af0ed12dc57cfad8aaa52225a3e5dc905fbbac038a5405",
+    "jit/models/pe.py": "894320ffe2433a4a85ac8445f6213a9f121d447ba9160a4c795e373d5266c71d",
+    "jit/models/pe_config.py": "673d59462cce04af72cd6987e58a032a9a4fe207eb2eb1fa4906b7235cacebb7",
+    "jit/models/rope.py": "6ac24a5da12f952d709c66abb2b86c951072ff84c66c654b111f5602c6ed204b",
+    "jit/preflight.py": "6a6949dfe18fe5cbf8c1c945177a643aa548d3eeb803147429693816df735f10",
+    "jit/projection_loss.py": "05eea4a3b9732c045f0c7445c632ba9f83cda6b72a70a2ceaa3ed9a590a4c20c",
+    "jit/projectors.py": "b7b4e18749d52b8edda3511ec23c034bd2c7f6d1aec1a30dd3b7c2ae1e255e09",
+    "jit/resource_paths.py": "0f3bfe2c634cd9e948acd108fb7c39f115595db9b9d136caa03a31194ee1f457",
+    "jit/spnorm.py": "8d73e99de3ef3e05947e01444b9cd470b34e597a907b9d2ead3f3e86f554ebfe",
+    "jit/util/crop.py": "08da8c1300202e66773806085fcaf2415acf1e38ac8923d5cdf79cafd770ccb6",
+    "jit/util/lr_sched.py": "47765fbc75affedb8c8c062d8b784fd00a6ee4527c8a82edb8cf514235d7e048",
+    "jit/util/misc.py": "0e91e82210582785d475bbc968a6effc589d77880c43ec315e01ac78740b3003",
+    "jit/util/model_util.py": "f4f35cc86a41b374d9e3654c8a2cddc12fbb11d41a28d24f05cf667c008b912e",
+    "jit/vision_encoder.py": "03649476167ec6bb96cd8544c33b8852794a1416ff738bdacceaeeec993fb76e"
+  },
+  "generation_source_sha256": {
+    "dino_v3_lora.py": "f5da76ba60baaba650c05f5e5fec731d1f61ec33f4d2b13ee1840993b4288277",
+    "dino_lora.py": "4764131ec65c1848dcdb14db4f67e888c8d4915b0c97e15e35ad6669e11303e4",
+    "pixeldit2_projector.py": "af44f99c3a3c17fdb688439f05a570363b7b1ef74fb5662cf580725958c3a8f7",
+    "require.txt": "8c23358d4cf77049d7896a47f857492bdd6542b4dc5524a5d841d565c623141a",
+    ".gitignore": "7728684e9e372d6c3a42807f07e2fbf3bef6c192790f56f93a7739b15f61e039"
+  }
+}

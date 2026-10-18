@@ -7,6 +7,7 @@
 !/require.txt
 !/Ours_BaseT_Residual_1008/
 !/Ours_BaseT_rmsnorm2_Residual_1016/
+!/iREPA__rmsnorm2_Residual_1018/
 !/5_rmsnorm2_Residual(0,1)_1017/
 !/Ours_BaseT_nogamma_Residual_1016/
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/
@@ -26,6 +27,7 @@ credentials*.json
 **/.git/
 **/.git.*
 !/Ours_BaseT_rmsnorm2_Residual_1016/.gitignore
+!/iREPA__rmsnorm2_Residual_1018/.gitignore
 !/5_rmsnorm2_Residual(0,1)_1017/.gitignore
 !/Ours_BaseT_nogamma_Residual_1016/.gitignore
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/.gitignore

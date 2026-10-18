@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/facebookresearch/dino",
+  "commit": "7c446df5b9f45747937fb0d72314eb9f7b66930a",
+  "sha256": {
+    "LICENSE": "50e6751797c50dedd75ef1b8a0d9e42f5f8472e9fbce91f34718e9f97b0c780a",
+    "utils.py": "962a97e1acda1c986dfd921275325e4083f9016dddadcf018f1ccf03fa600eab",
+    "hubconf.py": "fa80babf82c71d2123e23b05061eb1991a1fbc9877238f250b2a25023e910f72",
+    "vision_transformer.py": "b1f998d5f49ab43666b9fc6d007c5f6540c3ead2e8645e144f74045f63ff44d7"
+  }
+}

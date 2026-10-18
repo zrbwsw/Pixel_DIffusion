@@ -4,12 +4,15 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 
 ## GitHub 同步范围
 
-仓库 `zrbwsw/Pixel_DIffusion` 发布以下四个版本的代码、配置、脚本、测试及必要
+新增独立重构版本 [`iREPA__rmsnorm2_Residual_1018/`](iREPA__rmsnorm2_Residual_1018/)：以原版 iREPA 为基座，仅接入生成侧 RMSNorm 残差；包含 NoMLS 和 PMean0 八卡配置与验证说明。
+
+仓库 `zrbwsw/Pixel_DIffusion` 发布以下版本的代码、配置、脚本、测试及必要
 第三方源码，不上传实验输出、数据集、预训练权重或评测资源。各版本使用相同依赖，
 根目录 `require.txt` 引用原版本的依赖；也可使用各版本自己的 `require.txt`。
 
 | 版本 | 主要区别 |
 | --- | --- |
+| [`iREPA__rmsnorm2_Residual_1018/`](iREPA__rmsnorm2_Residual_1018/) | 原版 iREPA 的最小生成侧扩展；NoMLS / PMean0 八卡消融。 |
 | [`Ours_BaseT_Residual_1008/`](Ours_BaseT_Residual_1008/) | 原始实现；启用时两路共享可学习通道权重。 |
 | [`Ours_BaseT_rmsnorm2_Residual_1016/`](Ours_BaseT_rmsnorm2_Residual_1016/) | DINO、JiT 各自学习独立的通道权重。 |
 | [`Ours_BaseT_nogamma_Residual_1016/`](Ours_BaseT_nogamma_Residual_1016/) | affine-free per-token RMSNorm，无可学习 gamma。 |
@@ -20,7 +23,7 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 原版本的历史部署说明位于 [remote_setup.md](Ours_BaseT_Residual_1008/readme/remote_setup.md)。
 远端使用 `scripts/train_portable.sh` 选择 GPU 和资源路径，不要直接使用本机专用脚本。
 
-以下为原始服务器的完整工作区说明；除上面列出的四个版本外，其他方法和资源目录不会随 Git clone 下载。
+以下为原始服务器的完整工作区说明；除已发布版本外，其他方法和资源目录不会随 Git clone 下载。
 
 `Pixel_Diffusion` 是当前项目根目录。相关工作的源码、论文资料、实验记录、评测资源和我们的方法实现分开放置；以下只列非隐藏目录。
 
