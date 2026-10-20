@@ -8,7 +8,7 @@
 !/Ours_BaseT_Residual_1008/
 !/Ours_BaseT_rmsnorm2_Residual_1016/
 !/iREPA__rmsnorm2_Residual_1018/
-!/5_rmsnorm2_Residual(0,1)_1017/
+!/5-3-Residual(0,1)-1017(DINOv3-B16)/
 !/Ours_BaseT_nogamma_Residual_1016/
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/
 
@@ -28,7 +28,7 @@ credentials*.json
 **/.git.*
 !/Ours_BaseT_rmsnorm2_Residual_1016/.gitignore
 !/iREPA__rmsnorm2_Residual_1018/.gitignore
-!/5_rmsnorm2_Residual(0,1)_1017/.gitignore
+!/5-3-Residual(0,1)-1017(DINOv3-B16)/.gitignore
 !/Ours_BaseT_nogamma_Residual_1016/.gitignore
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/.gitignore
 .venv/

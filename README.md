@@ -12,11 +12,14 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 
 | 版本 | 主要区别 |
 | --- | --- |
+| [5-3-Residual(0,1)-1017(DINOv3-B16)](5-3-Residual%280%2C1%29-1017%28DINOv3-B16%29/) | 实验表 5-3：JiT-only，保留输入 RMSNorm 与冻结 DINOv3 对齐 teacher；替换原 `5_rmsnorm2_Residual(0,1)_1017`。 |
 | [`iREPA__rmsnorm2_Residual_1018/`](iREPA__rmsnorm2_Residual_1018/) | 原版 iREPA 的最小生成侧扩展；NoMLS / PMean0 八卡消融。 |
 | [`Ours_BaseT_Residual_1008/`](Ours_BaseT_Residual_1008/) | 原始实现；启用时两路共享可学习通道权重。 |
 | [`Ours_BaseT_rmsnorm2_Residual_1016/`](Ours_BaseT_rmsnorm2_Residual_1016/) | DINO、JiT 各自学习独立的通道权重。 |
 | [`Ours_BaseT_nogamma_Residual_1016/`](Ours_BaseT_nogamma_Residual_1016/) | affine-free per-token RMSNorm，无可学习 gamma。 |
 | [`Ours_BaseT_noaffine_nogamma_Residual_1017/`](Ours_BaseT_noaffine_nogamma_Residual_1017/) | 无 gamma 融合 RMSNorm；仅生成 DINO-LoRA 去最终 LN affine，独立 iREPA 正则化编码器保留预训练 LN。 |
+
+5-3 与 `Ours_BaseT_rmsnorm2_Residual_1016` 的最新发布仅含源码、配置和独立测试，不含 `scripts/`；使用各目录 README 中的 Python / torchrun 入口。
 
 可移植版本的远端安装、预检、训练和采样参见 [部署说明](REMOTE_SETUP.md)。
 1017 修正版的功能分工和旧 checkpoint 限制参见其 [README](Ours_BaseT_noaffine_nogamma_Residual_1017/README.md)。
