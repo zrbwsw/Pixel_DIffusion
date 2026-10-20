@@ -3,16 +3,16 @@
 # SiT: https://github.com/willisma/SiT
 # Lightning-DiT: https://github.com/hustvl/LightningDiT
 # --------------------------------------------------------
-"""原始 JiT Transformer 定义，以及 J18-new 复用的 trunk building blocks。
+"""JiT Transformer 定义，以及 DINO+JiT 复用的主干模块。
 
 标准 ``JiT.forward`` 是 image -> BottleneckPatchEmbed -> JiT blocks ->
-FinalLayer。J18-new 不直接调用这个 forward，而是在
-``dino_jit_denoiser._jit_forward_from_tokens`` 中接收预先构造的空间 token。历史
-J18-new 直接使用 DINOv3-B MLS token ``[B,256,768]``；Residual 变体则在进入
-blocks 前计算 native PatchEmbed + t-gated DINO residual。类别/时间 embedding、
+FinalLayer。DINO+JiT 不直接调用这个 forward，而是在
+``dino_jit_denoiser._jit_forward_from_tokens`` 中接收预先构造的空间 token。
+``replace`` 模式直接使用 DINOv3 MLS token；``residual`` 和 ``time_blend`` 模式
+在进入 blocks 前融合 JiT 原生 PatchEmbed 与 DINO token。类别/时间 embedding、
 32 个 in-context class token、RoPE 和 AdaLN 仍完全复用本文件。
 
-形状里的 ``B`` 是单个 DDP rank 的本地 batch，不是有效全局 batch 256。
+形状里的 ``B`` 是单个 DDP rank 的本地 batch，不是有效全局 batch。
 """
 
 import torch
@@ -32,10 +32,10 @@ class BottleneckPatchEmbed(nn.Module):
     """JiT 原生两阶段图像 patch embedding。
 
     对 256x256、patch16：``[B,3,256,256] -> [B,128,16,16] ->
-    [B,768,16,16] -> [B,256,768]``（JiT-B）。历史 J18-new 的 JiT trunk 输入
-    来自 DINO，因此该模块被冻结并绕过；Residual 变体重新启用它作为稳定的
-    noisy-pixel 主路。DDTHead 另有一个同类 embedder，把 noisy image 嵌入宽度
-    2048 的 head stream，两者参数不共享。
+    [B,768,16,16] -> [B,256,768]``（JiT-B）。``replace`` 模式的主干输入
+    来自 DINO，因此该模块被冻结并绕过；融合模式保留它作为 JiT 图像分支。
+    可选的 DDTHead 另有一个同类 embedder，把 noisy image 嵌入 head stream；
+    两者参数不共享。
     """
     def __init__(self, img_size=224, patch_size=16, in_chans=3, pca_dim=768, embed_dim=768, bias=True):
         super().__init__()
@@ -61,7 +61,7 @@ class BottleneckPatchEmbed(nn.Module):
 class TimestepEmbedder(nn.Module):
     """把每个样本的标量 t ``[B]`` 映射为全局 condition ``[B,C]``。
 
-    JiT-B 中 C=768。J18-new 的 t 是干净图像权重，取值 0--1；该 MLP 不要求
+    JiT-B 中 C=768。本项目的 t 是干净图像权重，取值 0--1；该 MLP 不要求
     t 是离散 diffusion step，因此可直接处理连续 rectified-flow 时间。
     """
     def __init__(self, hidden_size, frequency_embedding_size=256):
@@ -197,7 +197,7 @@ class FinalLayer(nn.Module):
     """原始 JiT 像素输出层。
 
     JiT-B/16 会把 ``[B,256,768]`` 映射成每 patch 768 个 RGB 像素值。
-    J18-new 启用 DDTHead 后本层被冻结且不参与 forward。
+    启用 DDTHead 后本层被冻结且不参与 forward。
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -247,7 +247,7 @@ class JiTBlock(nn.Module):
 class JiT(nn.Module):
     """Just image Transformer 主干。
 
-    J18-new 使用的 ``JiT-B/16`` 固定配置为：depth=12、hidden=768、heads=12、
+    ``JiT-B/16`` 的配置为：depth=12、hidden=768、heads=12、
     patch=16、32 个 class token 在 block index 4 前插入。DINOv3-B 的输出宽度
     也是 768，因此无需额外维度适配即可替换原生 patch token。
     """
@@ -293,7 +293,7 @@ class JiT(nn.Module):
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size)
 
-        # 原始 JiT 图像入口。J18-new trunk 不调用它，但 DDTHead 使用同样的设计。
+        # 原始 JiT 图像入口；DINO+JiT 的融合模式也使用它生成 JiT 分支 token。
         self.x_embedder = BottleneckPatchEmbed(input_size, patch_size, in_channels, bottleneck_dim, hidden_size, bias=True)
 
         # 256/16=16，因此 num_patches=256；固定二维 sin-cos APE 为 [1,256,768]。
@@ -335,7 +335,7 @@ class JiT(nn.Module):
         else:
             self.projectors = None
 
-        # 原始输出头；J18-new 用 DDTHead 替代后会冻结本层。
+        # 原始输出头；选择 DDTHead 替代时会冻结本层。
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
 
         self.initialize_weights()
@@ -381,7 +381,7 @@ class JiT(nn.Module):
     def unpatchify(self, x, p):
         """把 patch-major 像素还原成 NCHW 图像。
 
-        J18-new: ``[B,256,768] -> [B,16,16,16,16,3] -> [B,3,256,256]``。
+        JiT-B/16、256x256 图像：``[B,256,768] -> [B,16,16,16,16,3] -> [B,3,256,256]``。
         """
         c = self.out_channels
         h = w = int(x.shape[1] ** 0.5)
@@ -393,11 +393,11 @@ class JiT(nn.Module):
         return imgs
 
     def forward(self, x, t, y):
-        """原始 JiT forward；用于 baseline，不是 J18-new 的实际入口。
+        """原始 JiT forward；用于 baseline，不是 DINO+JiT 的实际入口。
 
-        ``x [B,3,256,256]``、``t [B]``、``y [B]``。J18-new 从
-        ``DINOJiTDenoiser._jit_forward_from_tokens`` 复刻 block 循环，以便直接接收
-        DINO token 并把 block 输出交给 DDTHead。
+        ``x [B,3,256,256]``、``t [B]``、``y [B]``。DINO+JiT 通过
+        ``DINOJiTDenoiser._jit_forward_from_tokens`` 执行 block 循环，接收
+        已构造的输入 token，并使用原生 FinalLayer 或可选的 DDTHead。
         """
         # [B] -> [B,768]，相加得到所有 block 共用的全局 AdaLN condition。
         t_emb = self.t_embedder(t)
@@ -438,7 +438,7 @@ class JiT(nn.Module):
 
 
 def JiT_B_16(**kwargs):
-    """J18-new B-scale trunk：12 层、768 宽度、12 heads、16x16 patch。"""
+    """JiT-B/16 主干：12 层、768 宽度、12 heads、16x16 patch。"""
     return JiT(depth=12, hidden_size=768, num_heads=12,
                bottleneck_dim=128, in_context_len=32, in_context_start=4, patch_size=16, **kwargs)
 

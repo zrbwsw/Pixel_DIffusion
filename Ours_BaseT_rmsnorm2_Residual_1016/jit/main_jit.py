@@ -1,13 +1,13 @@
-"""JiT 原始 class-to-image 训练主程序，J18-new 复用其基础设施。
+"""基于 JiT/iREPA 的 class-to-image 训练主程序，DINO+JiT 复用其基础设施。
 
 直接运行本文件会构建 ``jit/denoiser.py::Denoiser``。运行
 ``main_dino_jit.py`` 时，入口会在调用 ``main`` 前把模块级 ``Denoiser`` 替换为
-``DINOJiTDenoiser``，并替换数据集类。因此本文件在 J18-new 中仍负责 DDP、
+``DINOJiTDenoiser``，并替换数据集类。因此本文件在 DINO+JiT 中仍负责 DDP、
 DataLoader、AdamW、学习率、checkpoint、EMA 切换和在线 FID/IS，但不决定新的
 模型 forward。
 
-有效全局 batch 计算为 ``batch_size_per_rank * world_size * accum_iter``。以标准
-J18-new H100 两卡为例：128 * 2 * 1 = 256；模型单次前向的本地 B 仍是 128。
+有效全局 batch 计算为 ``batch_size_per_rank * world_size * accum_iter``。以八卡
+训练为例：128 * 8 * 1 = 1024；模型单次前向的本地 B 仍是 128。
 """
 
 import argparse
@@ -33,7 +33,7 @@ from engine_jit import train_one_epoch, evaluate, online_evaluation_assets
 from config_utils import parse_args_with_config
 from resource_paths import resource_root
 
-# 外层 J18-new 入口会在调用 main() 前注入 DINOJiTDenoiser。直接运行原生 JiT
+# 外层 main_dino_jit.py 会在调用 main() 前注入 DINOJiTDenoiser。直接运行原生 JiT
 # 时则在 main() 内延迟导入 baseline Denoiser，避免当前主线 import 未使用的
 # projection-loss / REPA wrapper。
 Denoiser = None
@@ -42,7 +42,7 @@ def get_args_parser():
     """Declare training, checkpoint and sampling settings for the DINO-JiT model."""
     parser = argparse.ArgumentParser('JiT', add_help=False)
 
-    # J18-new B-scale: model=JiT-B/16, img_size=256。
+    # 默认模型和分辨率：model=JiT-B/16, img_size=256。
     parser.add_argument('--model', default='JiT-B/16', type=str, metavar='MODEL',
                         help='Name of the model to train')
     parser.add_argument('--img_size', default=256, type=int, help='Image size')
@@ -366,7 +366,7 @@ def main(args):
         model_without_ddp.ema_params2 = copy.deepcopy(list(model_without_ddp.parameters()))
         print("Training from scratch")
 
-    # epoch 是完整遍历一次 ImageNet train split。J18-new 通常每 10 epoch 保存
+    # epoch 是完整遍历一次 ImageNet train split。默认配置每 10 epoch 保存
     # 持久 checkpoint，并按 eval_freq 用 EMA1 生成 50k 图像在线评估。
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()

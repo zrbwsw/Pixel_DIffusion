@@ -1,6 +1,6 @@
-"""J18-new 的 DINOv3 student/teacher 构建与按角色配置。
+"""DINOv3 student/teacher 构建与按角色配置。
 
-J18-new-B 使用 DINOv3-B/16。student 和 teacher 均输入
+默认配置使用 DINOv3-B/16。student 和 teacher 均输入
 ``[B, 3, 256, 256]``，patch size 16 产生 ``16x16=256`` 个 768 维 token。
 关键差异由 ``role`` 决定：
 
@@ -8,9 +8,10 @@ J18-new-B 使用 DINOv3-B/16。student 和 teacher 均输入
 * teacher：无 LoRA、完全冻结；
 * student 可取多层 MLS，teacher 始终使用 raw last。
 * student 可关闭最终 LN 的 affine；teacher 始终保留预训练 affine。
+* dino_train_final_norm 仅控制 student 最终 LN gamma/beta 是否训练，默认冻结。
 
 DINOv3 使用由坐标生成的 RoPE，不存在可训练 absolute position embedding；当前
-接口因此只暴露 patch embedding 的 train/freeze 选择。
+接口提供 patch embedding 与生成侧最终 LN 的 train/freeze 选择。
 
 当前活动代码只支持 DINOv3。历史 DINOv1 构建器已移入 ``code_archive``，避免
 阅读当前 class-to-image 数据流时还要追踪另一套模型加载逻辑。
@@ -79,6 +80,13 @@ def build_encoder(args, *, role: str) -> nn.Module:
     if role not in ("teacher", "student"):
         raise ValueError(f"role must be 'teacher' or 'student', got {role!r}")
 
+    train_final_norm = bool(getattr(args, "dino_train_final_norm", False))
+    if train_final_norm:
+        if not bool(getattr(args, "dino_generation_final_norm_affine", True)):
+            raise ValueError("dino_train_final_norm requires dino_generation_final_norm_affine=true")
+        if getattr(args, "dino_jit_input_mode", "replace") == "native":
+            raise ValueError("dino_train_final_norm requires an active generation DINO path")
+
     model_name = _validate_model_name(
         getattr(args, "dino_model_name", "dinov3_vitb16")
     )
@@ -111,7 +119,7 @@ def build_encoder(args, *, role: str) -> nn.Module:
         ),
         train_patch_embed=bool(getattr(args, "dino_train_patch_embed", True)),
         train_cls_token=False,
-        train_norm=False,
+        train_norm=train_final_norm,
         final_norm_affine=bool(
             getattr(args, "dino_generation_final_norm_affine", True)
         ),

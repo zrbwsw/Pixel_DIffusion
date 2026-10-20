@@ -1,10 +1,9 @@
-"""J18-new 使用的 DDT-style 双流像素预测头。
+"""可选的 DDT-style 双流像素预测头。
 
-Design: readme/J6_JiT_DDTHead_design.md.
 Reference impl: RAEv2/src/stage2/models/DDT.py (DDTDecoderBlock, DDTFinalLayer)
 and jit/model_jit.py (BottleneckPatchEmbed, Attention, SwiGLUFFN, FinalLayer).
 
-J18-new B-scale 中：
+以 JiT-B/16 主干、2048 维预测头为例：
 
 * base stream：JiT-B 输出 ``z_t [B,256,768]``；
 * head stream：noisy image ``[B,3,256,256]`` 经独立 bottleneck patch embed 得到
@@ -38,9 +37,9 @@ class SimplePatchEmbed(nn.Module):
     """RAEv2-style single-conv patch embedding.
 
     `Conv2d(in_chans, embed_dim, kernel_size=patch, stride=patch)` — one stage,
-    no PCA-like bottleneck. Matches RAEv2 `timm.PatchEmbed` semantics. Used by
-    J9 to test whether JiT's `BottleneckPatchEmbed` (3→128→2048 in J8) is
-    bottlenecking head capacity.
+    no PCA-like bottleneck. Matches RAEv2 `timm.PatchEmbed` semantics. This
+    alternative to JiT's two-stage `BottleneckPatchEmbed` isolates the effect
+    of the intermediate channel bottleneck on head capacity.
     """
 
     def __init__(self, img_size=256, patch_size=16, in_chans=3, embed_dim=768, bias=True):
@@ -76,7 +75,7 @@ class DDTHeadBlock(nn.Module):
         )
 
     def forward(self, x, z_t, rope):
-        # J18-new: x/z_t 均为 [B,256,2048]；16 heads，每头 128 维。
+        # 2048 维预测头示例：x/z_t 均为 [B,256,2048]；16 heads，每头 128 维。
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = \
             self.adaLN_modulation(z_t).chunk(6, dim=-1)
         x = x + gate_msa * self.attn(modulate_pertoken(self.norm1(x), shift_msa, scale_msa), rope=rope)
@@ -110,20 +109,20 @@ class JiTDDTHead(nn.Module):
     trunk 的 head_dim=64 RoPE。
 
     Args:
-        hidden_size: head working width (e.g. 768 for J6, 2048 for J8).
+        hidden_size: head working width (e.g. 768 or 2048).
         patch_size: JiT patch size (16). Output is patch_size**2 * in_channels per token.
         in_channels: image channels (3).
         bottleneck_dim: BottleneckPatchEmbed pca_dim (128 for B/16). Ignored when embed_type='patchembed'.
         input_size: image side (256).
         depth: number of head decoder blocks (default 2).
-        num_heads: head attention heads (default 12 for J6; 16 for J8 so 2048/16=128).
+        num_heads: head attention heads (e.g. 12 at width 768, or 16 at width 2048).
         cond_hidden_size: dim of z_t coming from JiT (default = hidden_size -> Identity proj).
         time_reinject: if True, use the RAEv2 post-base ordering
             ``z_cond = proj(SiLU(z_t + t_emb))``; otherwise use
             ``z_cond = proj(z_t)``. This option does not add time tokens to the
             JiT sequence.
-        embed_type: 'bottleneck' (J6/J7/J8, JiT-native 3->128->hidden two-stage) or
-                    'patchembed' (J9, RAEv2-style single Conv2d 3->hidden).
+        embed_type: 'bottleneck' (JiT-native 3->128->hidden two-stage) or
+                    'patchembed' (RAEv2-style single Conv2d 3->hidden).
     """
 
     def __init__(
@@ -149,8 +148,8 @@ class JiTDDTHead(nn.Module):
         self.embed_type = str(embed_type)
         cond_hidden_size = hidden_size if cond_hidden_size is None else cond_hidden_size
 
-        # J18-new 使用 bottleneck：3 -> 128 -> 2048。对 256/P16，输出固定为
-        # [B,256,2048]。另一 patchembed 分支仅用于 J9 ablation。
+        # 2048 维 bottleneck 示例：3 -> 128 -> 2048。对 256/P16，输出为
+        # [B,256,2048]；patchembed 分支用于比较单层卷积与两阶段嵌入。
         if self.embed_type == "bottleneck":
             self.x_embedder = BottleneckPatchEmbed(
                 input_size, patch_size, in_channels, bottleneck_dim, hidden_size, bias=True
@@ -163,7 +162,7 @@ class JiTDDTHead(nn.Module):
             raise ValueError(
                 f"Unknown embed_type={self.embed_type!r}; expected 'bottleneck' or 'patchembed'."
             )
-        # J18-new 将 JiT condition [B,256,768] 逐 token 投影到 [B,256,2048]。
+        # 2048 维预测头将 JiT condition [B,256,768] 投影到 [B,256,2048]。
         self.z_proj = (
             nn.Linear(cond_hidden_size, hidden_size)
             if cond_hidden_size != hidden_size
@@ -245,7 +244,7 @@ class JiTDDTHead(nn.Module):
         """运行 head stream。
 
         ``noisy_image [B,3,256,256]`` 使用扩散像素范围，不是 DINO 标准化值；
-        ``z_t [B,256,768]`` 来自 JiT base stream。标准 J18-new 关闭
+        ``z_t [B,256,768]`` 来自 JiT base stream。默认关闭
         ``time_reinject``；RAEv2-style 消融开启后计算
         ``z_cond = z_proj(SiLU(z_t + t_emb[:,None]))``。返回
         ``[B,256,768]`` patch prediction。

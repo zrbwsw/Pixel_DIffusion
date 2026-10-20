@@ -1,5 +1,5 @@
 # Label-drop residual ablation from
-# Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80.
+# Historical BaseT recipe; retained for checkpoint compatibility.
 #
 # Controlled architecture change:
 #   old: DINO-LoRA MLS replaces native JiT patch tokens

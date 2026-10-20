@@ -10,8 +10,8 @@
 3. JiT-B 的空间输出交给 DDTHead，或通过原生 final_layer 直接预测像素；
 4. 输出 ``x_pred``，再换算成 rectified-flow velocity 计算去噪损失。
 
-J18-new B-scale 的固定形状如下。``B`` 是每个 DDP rank 的本地 batch；有效全局
-batch 256 在两卡 H100 上对应 ``B=128``，在四卡上通常对应 ``B=64``。
+下面以 ImageNet-256、DINOv3-B/16、JiT-B/16 为例说明形状。``B`` 是每个
+DDP rank 的本地 batch；例如八卡、每卡 ``B=128``、无梯度累积时，全局 batch 为 1024。
 
 * image / noise / z / x_pred: ``[B, 3, 256, 256]``
 * DINOv3-B patch grid: ``16 x 16``，因此 ``N=256``
@@ -21,7 +21,7 @@ batch 256 在两卡 H100 上对应 ``B=128``，在四卡上通常对应 ``B=64``
 * DDTHead condition: ``[B, 256, 768] -> [B, 256, 2048]``
 * DDTHead patch prediction: ``[B, 256, 16*16*3=768]``
 
-当前 ``Ours-J18-new-drop0.1-l4-B`` 配置使用一基 ``jit_alignment_depth=4``：
+默认对齐配置使用一基 ``jit_alignment_depth=4``：
 捕获 JiT block index 3 的输出，经 ``3x3 ConvProj`` 对齐 teacher。这个对齐
 projector 不参与 JiT 输入融合；带噪 student 的输入可使用固定 ImageNet 标准化
 或与扩散时间相关的解析矩标准化，clean teacher 始终使用固定标准化。
@@ -43,6 +43,7 @@ from util.model_util import RMSNorm
 
 from dino_encoder import build_encoder
 from jit_ddt_head import JiTDDTHead
+from blend_time import sigmoid_blend_time, validate_blend_time
 
 
 class DINOResidualAdapter(nn.Module):
@@ -76,7 +77,7 @@ class DINOJiTDenoiser(nn.Module):
 
     def __init__(self, args):
         super().__init__()
-        # J18-new 使用 JiT-B/16：12 blocks、hidden=768、12 heads、patch=16。
+        # 默认 JiT-B/16：12 blocks、hidden=768、12 heads、patch=16。
         # 旧 replace 路径绕过并冻结原生 x_embedder；其他路径保留并训练它。
         self.dino_jit_input_mode = str(
             getattr(args, "dino_jit_input_mode", "replace")
@@ -98,6 +99,14 @@ class DINOJiTDenoiser(nn.Module):
         )
         self.dino_time_blend_reverse = bool(
             getattr(args, "dino_time_blend_reverse", False)
+        )
+        self.dino_time_blend_transform = str(
+            getattr(args, "dino_time_blend_transform", "linear")
+        )
+        self.dino_time_blend_key = float(getattr(args, "dino_time_blend_key", 100.0))
+        validate_blend_time(
+            self.dino_time_blend_transform, self.dino_time_blend_key,
+            self.dino_jit_input_mode,
         )
         self.dino_jit_pre_blend_rmsnorm = bool(
             getattr(args, "dino_jit_pre_blend_rmsnorm", False)
@@ -435,6 +444,8 @@ class DINOJiTDenoiser(nn.Module):
         ``t*native + (1-t)*projected_dino``. This reverses only the blend
         weights; JiT and the DINO input projector still receive the original
         clean-image timestep, and both paths keep their own RMSNorm gains.
+        With the sigmoid transform, replace t only in these two weights by
+        f(t)=sigmoid(key*(t-0.1)); reverse then uses (1-f(t))*DINO + f(t)*JiT.
 
         If ``dino_residual_drop_on_label_drop`` is enabled, the residual gate
         is zeroed for dropped labels. In time_blend, optional grounding dropout
@@ -475,7 +486,13 @@ class DINOJiTDenoiser(nn.Module):
                 )
             native_tokens = self.jit_pre_blend_norm(native_tokens)
             projected_tokens = self.dino_pre_blend_norm(projected_tokens)
-            t = timesteps.flatten().to(device=native_tokens.device, dtype=native_tokens.dtype)
+            # 仅在此处为融合权重构造新 t；上面的 PgT 和后续 JiT 仍用 timesteps。
+            blend_t = timesteps.flatten()
+            if getattr(self, "dino_time_blend_transform", "linear") == "sigmoid":
+                blend_t = sigmoid_blend_time(
+                    blend_t, key=getattr(self, "dino_time_blend_key", 100.0),
+                )
+            t = blend_t.to(device=native_tokens.device, dtype=native_tokens.dtype)
             if t.numel() != native_tokens.shape[0]:
                 raise ValueError("Expected one blend timestep per sample.")
             t = t.view(-1, 1, 1)
@@ -610,7 +627,7 @@ class DINOJiTDenoiser(nn.Module):
     ):
         """从图像 patch token 执行 JiT trunk，用所选输出头还原图像。
 
-        J18-new 主路径的形状变化：
+        JiT-B/16、256x256 图像的形状变化：
 
         * ``patch_tokens``: ``[B,256,768]``；来自 DINO 或 JiT 原生 x_embedder；
         * ``t_emb/y_emb/c``: 均为 ``[B,768]``；c 用于每个 JiT block 的全局 AdaLN；
@@ -690,7 +707,7 @@ class DINOJiTDenoiser(nn.Module):
         return x_pred, jit_tokens
 
     def forward(self, x: torch.Tensor, labels: torch.Tensor):
-        """执行一个 J18-new 训练 step 并返回标量总损失与诊断指标。
+        """计算一个训练 batch 的标量总损失与诊断指标。
 
         Args:
             x: ``float32 [B,3,256,256]``，范围 ``[-1,1]``。

@@ -2,7 +2,7 @@
 
 ``conv`` 是 iREPA 的空间 2D projector；``mlp`` 是 REPA 的逐 token
 ``D_in -> D_hidden -> D_hidden -> D_out`` projector。两者都保持
-``[B,T,*]`` 的 batch/token 轴，并且在 J18-new 中只服务 alignment 分支。
+``[B,T,*]`` 的 batch/token 轴，在 DINO+JiT 中只服务 alignment 分支。
 """
 
 import torch.nn as nn
@@ -51,7 +51,7 @@ class ProjectionLayer(nn.Module):
         """投影 token，并保持 batch/token 轴语义。
 
         Args:
-            x: ``[B,T,D]``；J18-new 为 ``[B,256,768]``。
+            x: ``[B,T,D]``；JiT-B/16、256x256 图像对应 ``[B,256,768]``。
             hw: 非方形网格可显式传 ``(H,W)``；当前 256/16 使用自动推导的 16x16。
         """
         B, T, D = x.shape
@@ -67,7 +67,7 @@ class ProjectionLayer(nn.Module):
                 H, W = hw
                 assert H * W == T, f"Provided hw={hw} but T={T}"
 
-            # J18-new: [B,256,768] -> [B,768,16,16]。
+            # JiT-B/16、256x256 图像：[B,256,768] -> [B,768,16,16]。
             x_ = x.reshape(B, H, W, D).permute(0, 3, 1, 2).contiguous()
             y  = self.projection_layer(x_)                  # [B,768,16,16]
             y  = y.permute(0, 2, 3, 1).contiguous()         # [B, H, W, z_dim]

@@ -1,6 +1,6 @@
 """DINOv3 patch-token wrapper：预训练加载、LoRA 注入与多层聚合。
 
-J18-new 使用 DINOv3-B/16：12 blocks、patch=16、embed_dim=768。对 256x256 图像，
+默认使用 DINOv3-B/16：12 blocks、patch=16、embed_dim=768。对 256x256 图像，
 patch embedding 产生 16x16 网格，即每层 patch token 为 ``[B,256,768]``。
 
 student 对 block [2,5,8,11] 使用 RAEv2 MLS：选中层逐元素平均，再加最后一个
@@ -179,10 +179,16 @@ class DINOv3PatchTokenEncoder(nn.Module):
         if aggregation not in self.SUPPORTED_AGGREGATIONS:
             raise ValueError(f"Unknown aggregation={aggregation}. "
                              f"Supported: {self.SUPPORTED_AGGREGATIONS}")
+        if train_norm and (not use_lora or not final_norm_affine):
+            raise ValueError("train_norm requires a LoRA student with final_norm_affine=True")
         self.model = load_dino_v3(model_name=model_name, weights_path=weights_path)
         self.embed_dim = int(getattr(self.model, "embed_dim",
                                      getattr(self.model, "num_features", 768)))
         self.final_norm_affine = bool(final_norm_affine)
+        if train_norm:
+            norm = self.model.norm
+            if not isinstance(norm, nn.LayerNorm) or norm.weight is None or norm.bias is None:
+                raise ValueError("Training final LN requires nn.LayerNorm with gamma and beta")
         if not self.final_norm_affine:
             # Replace only the output LN after loading the pretrained state.
             # get_intermediate_layers(norm=True) also uses this LN for MLS.
@@ -211,7 +217,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
         self.aggregation = aggregation
         self.num_lora_modules = 0
 
-        # DINOv3-B 共 12 个 block。J18-new 的 default 会在上层解析成
+        # DINOv3-B 共 12 个 block。默认选层会在上层解析成
         # [2,5,8,11]；索引均从 0 开始。
         total_blocks = len(self.model.blocks)
         if layer_indices is None:
@@ -245,6 +251,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
         module = getattr(self.model, module_name, None)
         if module is None:
             return
+        # print(module_name, trainable, "***********************")
         for param in module.parameters():
             param.requires_grad_(trainable)
 
@@ -260,7 +267,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
     ):
         """返回 ``[B, num_patches, embed_dim]`` 的 normalized patch token。
 
-        在 J18-new B/16、256x256 下，所有输出均为 ``[B,256,768]``：
+        在 DINOv3-B/16、256x256 下，所有输出均为 ``[B,256,768]``：
 
         * ``aggregation='none'``：标准最后一层 normalized token；
         * ``mean/mls``：通过 ``get_intermediate_layers(..., norm=True)`` 取多层；
@@ -280,7 +287,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
                 return patch_tokens, patch_tokens
             return patch_tokens
 
-        # 多层路径：J18-new n_arg=[2,5,8,11]，outputs 是 4 个
+        # 默认多层路径：n_arg=[2,5,8,11]，outputs 是 4 个
         # [B,256,768] Tensor；梯度会从 MLS 和 raw-last 两条支路共同回到 student。
         n_arg = self._layer_indices if self._layer_indices is not None else 1
         outputs = self.model.get_intermediate_layers(

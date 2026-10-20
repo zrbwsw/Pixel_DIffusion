@@ -12,10 +12,9 @@
 因此，阅读这个文件时应把它理解为“配置和接线层”。真正的前向传播与损失在
 ``dino_jit_denoiser.py``，训练循环在 ``jit/main_jit.py``。
 
-本文档化注释统一以 J18-new 的 B-scale 配置为例：ImageNet-256、DINOv3-B/16、
-JiT-B/16、有效全局 batch 256。需要注意，代码中的 ``B`` 总是单个 DDP rank 的
-本地 batch，而不是全局 batch；例如两卡 H100、每卡 batch 128 时，模型前向看到
-的图像是 ``[128, 3, 256, 256]``，两卡梯度平均后才对应全局 batch 256。
+注释以 ImageNet-256、DINOv3-B/16、JiT-B/16 为例。代码中的 ``B`` 总是
+单个 DDP rank 的本地 batch，而不是全局 batch；例如八卡、每卡 batch 128、
+无梯度累积时，模型前向看到的图像是 ``[128, 3, 256, 256]``，全局 batch 为 1024。
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ class FlexibleImageNet256Dataset(torch.utils.data.Dataset):
     两条路径都会应用 JiT 显式传入的 augmentation。当前新实验默认
     ``hflip_prob=0``；历史 JiT/iREPA 实验使用 ``hflip_prob=0.5``。
 
-    J18-new 的单样本输出是 ``image: uint8 [3, 256, 256]`` 与标量类别标签；
+    256x256 配置的单样本输出是 ``image: uint8 [3, 256, 256]`` 与标量类别标签；
     DataLoader 拼接后得到 ``[B_local, 3, 256, 256]`` 和 ``[B_local]``。像素在
     ``jit/engine_jit.py`` 中才会从 ``[0,255]`` 转成 float32 的 ``[-1,1]``。
     """
@@ -129,7 +128,7 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     # ------------------------------------------------------------------
     # 1. DINO 编码器及多层特征聚合
     # ------------------------------------------------------------------
-    # 当前 class-to-image 主线只保留 DINOv3；B/16 是 J18-new 的默认编码器。
+    # 当前 class-to-image 主线只保留 DINOv3，默认编码器为 B/16。
     parser.add_argument("--dino_model_name", default="dinov3_vitb16", type=str,
                         help="DINOv3 encoder name, e.g. dinov3_vitb16 or dinov3_vitl16.")
     # 预训练权重文件。可传空字符串，让构建器从 PRETRAIN_MODELS_ROOT
@@ -220,6 +219,19 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
              "Only valid with time_blend; grounding dropout still sets DINO=0, JiT=1.",
     )
     parser.add_argument(
+        "--dino_time_blend_transform",
+        choices=("linear", "sigmoid"),
+        default="linear",
+        help="Transform t only in the DINO/JiT blend weights. sigmoid uses "
+             "sigmoid(key*(t-0.1)); diffusion, JiT and PgT still use original t.",
+    )
+    parser.add_argument(
+        "--dino_time_blend_key",
+        type=float,
+        default=100.0,
+        help="Fixed slope key for sigmoid blend weights; default 100.",
+    )
+    parser.add_argument(
         "--dino_grounding_drop_on_label_drop",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -286,8 +298,16 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     # ------------------------------------------------------------------
     # BooleanOptionalAction 同时提供 --foo 与 --no-foo。DINOv3 的预训练 patch
     # embedding 可以选择 fine-tune；空间位置由无可训练参数的 RoPE 提供，因此没有
-    # train_pos_embed 开关。CLS token 和末端 norm 仍可独立控制，teacher 始终冻结。
+    # train_pos_embed 开关。CLS token 保持冻结；仅生成侧末端 LN 可选择解冻。
     parser.add_argument("--dino_train_patch_embed", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--dino_train_final_norm",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Train gamma/beta of the generation DINO-LoRA final LayerNorm only. "
+             "Requires final LN affine and an active generation DINO path; "
+             "the alignment teacher and transformer-block norms stay frozen.",
+    )
 
     # ------------------------------------------------------------------
     # 6. DDT 风格像素解码头
@@ -298,7 +318,7 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
         help="Use DDTHead; --no-use_ddt_head restores the native JiT final layer.",
     )
     # DDTHead 重新嵌入 noisy image，并用 JiT 输出通过逐 token AdaLN 调制。
-    # 0 表示沿用 JiT hidden size；非零值允许使用更宽的头（例如 J8 的 2048）。
+    # 0 表示沿用 JiT hidden size；非零值允许使用更宽的头（例如 2048）。
     parser.add_argument("--ddt_head_dim", default=0, type=int)
     # 0 表示自动选择：优先 JiT head 数，否则回退到可整除 head_dim 的设置。
     parser.add_argument("--ddt_head_num_heads", default=0, type=int)

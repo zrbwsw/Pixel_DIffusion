@@ -51,15 +51,29 @@ PYTHONPATH=jit python -m evaluation.evaluate_fdr6 \
 `generated_images/<method>-steps.../00000.png` 目录，因此不会破坏已有的 PNG
 路径和 `--resume_eval_images` 行为。需要 NPZ 时使用：
 
+本次 GitHub 发布不含开发机的 `scripts/sample_portable.sh`。可以直接执行以下 Python 入口（从项目根目录运行；先配置前述本地资源路径）：
+
 ```bash
-bash scripts/sample_and_evaluate_fdr6.sh \
-  configs/Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80.yaml \
-  checkpoints/Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80/checkpoint-80.pth \
-  checkpoints/eval_checkpoint/Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80/checkpoint-80_cfg2p5_interval0p0_1p0_flowdpm100_image50000
+experiment='BaseT-Residual(1-t,t)-NoDinoPre-PgT-blend_rmsnorm2-NoDDTHead-B-80'
+EVAL_DIR="checkpoints/eval_checkpoint/$experiment/checkpoint-80_cfg2p5_heun50_example"
+
+PYTHONPATH=.:jit python -m jit.evaluation.prepare_sampling \
+  --config "configs/$experiment.yaml" \
+  --checkpoint "checkpoints/$experiment/checkpoint-80.pth" \
+  --output-dir "$EVAL_DIR" \
+  --sampler heun --steps 50 --cfg 2.5 --interval-min 0 --interval-max 1
+
+torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
+  main_dino_jit.py --config "$EVAL_DIR/sampling_config.yaml"
+
+# 确认采样成功后再评测。
+PYTHONPATH=jit python -m evaluation.evaluate_fdr6 \
+  --npz "$EVAL_DIR/samples.npz" \
+  --metrics fid,inception_score,fdr6 \
+  --output-json "$EVAL_DIR/offline_metrics.json"
 ```
 
-脚本先检查全部离线资源、生成并校验采样配置，再用 `torchrun` 采样；采样正常退出后由单进程运行离线 FID/IS/FDR6。`PREFLIGHT_ONLY=1` 只检查资源和配置，不启动 GPU 任务。PNG 是可恢复的中间结果，NPZ 使用 `arr_0.npy` 的 ZIP64 无压缩
-格式，并通过 `.incomplete` 临时文件原子生成。默认不覆盖已完成的 NPZ。
+使用与 checkpoint 匹配的配置；若训练时通过命令行覆盖了模型开关，采样配置也必须包含这些覆盖。PNG 是可恢复的中间结果，NPZ 使用 `arr_0.npy` 的 ZIP64 无压缩格式，通过 `.incomplete` 临时文件原子生成，默认不覆盖已完成 NPZ。
 
 注意：离线 Inception Score 使用 vendored evaluator 的实现，online JiT 的
 `torch-fidelity` IS 与它不是同一个数值协议；两者的结果不要直接混作同一列。

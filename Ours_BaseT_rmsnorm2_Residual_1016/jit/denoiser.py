@@ -1,8 +1,8 @@
 """原始 JiT class-to-image rectified-flow wrapper。
 
-它是理解 J18-new 的 baseline：原始路径直接将 noisy image 交给 ``JiT.forward``，
+它是理解 DINO+JiT 扩展的 baseline：原始路径直接将 noisy image 交给 ``JiT.forward``，
 可选在 JiT 中间层做 REPA。``main_dino_jit.py`` 会把本类替换成项目根目录的
-``DINOJiTDenoiser``，所以 J18-new 训练不会执行本文件的 forward；采样方程、
+``DINOJiTDenoiser``，所以 DINO+JiT 训练不会执行本文件的 forward；采样方程、
 label dropout、CFG、EMA 等设计则被新 wrapper 延续。
 """
 

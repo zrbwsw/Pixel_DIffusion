@@ -1,4 +1,4 @@
-"""JiT/J18-new 共用的单 epoch 训练与 class-conditional 在线评估循环。
+"""JiT 与 DINO+JiT 共用的单 epoch 训练与 class-conditional 在线评估循环。
 
 模型计算在 CUDA BF16 autocast 下执行；输入归一化、若干 attention/loss 统计会
 显式回到 FP32。当前实现未使用 GradScaler，因为 BF16 的指数范围通常不需要
@@ -256,8 +256,8 @@ def train_one_epoch(
 ):
     """训练一个 epoch。
 
-    J18-new 两卡 H100 示例：DataLoader 每 rank 给 ``x uint8 [128,3,256,256]``、
-    ``labels [128]``；world_size=2、accum_iter=1，因此有效全局 batch=256。
+    八卡训练示例：DataLoader 每 rank 给 ``x uint8 [128,3,256,256]``、
+    ``labels [128]``；world_size=8、accum_iter=1，因此有效全局 batch=1024。
     Teacher target 和 iREPA loss 均在 ``DINOJiTDenoiser.forward`` 内部完成。
     """
     model.train(True)

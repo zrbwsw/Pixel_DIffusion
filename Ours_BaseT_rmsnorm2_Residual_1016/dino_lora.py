@@ -6,7 +6,7 @@
 * ``LoRALinear`` 冻结原始 ``nn.Linear``，学习 ``B @ A``；
 * ``inject_dino_lora`` 遍历 ViT blocks，并按名称替换 qkv/proj/fc1/fc2。
 
-以 J18-new 的 DINOv3-B/16、rank=64 为例，每个 block 的目标层保持原有输入
+以 DINOv3-B/16、rank=64 为例，每个 block 的目标层保持原有输入
 输出维度，因而不会改变 patch token 的 ``[B, 256, 768]`` 形状。
 """
 
