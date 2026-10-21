@@ -15,6 +15,7 @@ from torch.nn.functional import scaled_dot_product_attention
 
 
 def apply_adaln(x, shift, scale):
+    # x: [B,N,C]；shift/scale: [B,1,C]，广播作用到每个 token
     return x * (1 + scale) + shift
 
 
@@ -30,6 +31,7 @@ class TimestepConditioner(nn.Module):
 
     @staticmethod
     def timestep_embedding(t, dim, max_period=10):
+        # t: [B] 标量时间 → [B, dim]，前半 cos、后半 sin 的正弦频率嵌入
         half = dim // 2
         freqs = torch.exp(
             -math.log(max_period)
@@ -43,6 +45,7 @@ class TimestepConditioner(nn.Module):
         return embedding
 
     def forward(self, t):
+        # t: [B] → [B, hidden_size]
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         mlp_dtype = next(self.mlp.parameters()).dtype
         if t_freq.dtype != mlp_dtype:
@@ -57,6 +60,7 @@ class RMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
+        # hidden_states: [..., C]，在末维做 RMS 归一化；weight: [C] 可学习增益
         input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
@@ -77,11 +81,13 @@ class FeedForward(nn.Module):
         self.ffn_dropout = nn.Dropout(drop)
 
     def forward(self, x):
+        # x: [B,N,dim] → [B,N,dim]；SwiGLU 结构：silu(w1(x)) * w3(x) 再投影回 dim
         hidden = torch.nn.functional.silu(self.w1(x)) * self.w3(x)
         return self.w2(self.ffn_dropout(hidden))
 
 
 def precompute_freqs_cis_2d(dim, height, width, theta=10000.0, scale=16.0):
+    # 预生成 2D RoPE 频率表；返回 [H*W, dim//2] 复数张量（dim 为 head_dim）
     x_pos = torch.linspace(0, scale, width)
     y_pos = torch.linspace(0, scale, height)
     y_pos, x_pos = torch.meshgrid(y_pos, x_pos, indexing="ij")
@@ -97,6 +103,7 @@ def precompute_freqs_cis_2d(dim, height, width, theta=10000.0, scale=16.0):
 
 
 def apply_rotary_emb(xq, xk, freqs_cis):
+    # xq/xk: [B,N,heads,head_dim]；freqs_cis: [N,head_dim//2] 复数；返回与输入同形
     freqs_cis = freqs_cis[None, :, None, :]
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
@@ -124,19 +131,21 @@ class RotaryAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x, pos, mask):
+        # x: [B,N,C]；pos: [N,head_dim//2]（freqs_cis）；mask: 注意力掩码或 None
         batch, length, channels = x.shape
         qkv = self.qkv(x).reshape(
             batch, length, 3, self.num_heads, channels // self.num_heads,
-        ).permute(2, 0, 1, 3, 4)
+        ).permute(2, 0, 1, 3, 4)  # → [3, B, N, heads, head_dim]
         q, k, v = qkv[0], qkv[1], qkv[2]
         q = self.q_norm(q)
         k = self.k_norm(k)
-        q, k = apply_rotary_emb(q, k, freqs_cis=pos)
+        q, k = apply_rotary_emb(q, k, freqs_cis=pos)  # 注入 2D 位置，形状不变
         q = q.view(batch, -1, self.num_heads, channels // self.num_heads).transpose(1, 2)
         k = k.view(batch, -1, self.num_heads, channels // self.num_heads).transpose(1, 2).contiguous()
         v = v.view(batch, -1, self.num_heads, channels // self.num_heads).transpose(1, 2).contiguous()
+        # q/k/v: [B, heads, N, head_dim]
         x = scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0)
-        x = x.transpose(1, 2).reshape(batch, length, channels)
+        x = x.transpose(1, 2).reshape(batch, length, channels)  # → [B, N, C]
         return self.proj_drop(self.proj(x))
 
 
@@ -161,8 +170,9 @@ class ModulatedDiTBlock(nn.Module):
         )
 
     def forward(self, x, c, pos, mask=None):
+        # x: [B,N,C]；c: [B,1,C] 时间条件向量；pos: [N,head_dim//2]
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.adaLN_modulation(c).chunk(6, dim=-1)
+            self.adaLN_modulation(c).chunk(6, dim=-1)  # 各 [B,1,C]，adaLN 六路调制参数
         )
         x = x + gate_msa * self.attn(apply_adaln(self.norm1(x), shift_msa, scale_msa), pos, mask=mask)
         x = x + gate_mlp * self.mlp(apply_adaln(self.norm2(x), shift_mlp, scale_mlp))
@@ -200,9 +210,10 @@ class TimestepProjection(nn.Module):
         return self._pos_cache[key].to(device)
 
     def forward(self, tokens, t, grid_hw):
-        x = self.input_proj(tokens)
-        c = self.t_embedder(t).unsqueeze(1).to(dtype=x.dtype)
-        pos = self.fetch_pos(grid_hw[0], grid_hw[1], x.device)
+        # tokens: [B,N,in_dim]；t: [B]；grid_hw: (gh,gw)，要求 N=gh·gw
+        x = self.input_proj(tokens)  # → [B,N,hidden]
+        c = self.t_embedder(t).unsqueeze(1).to(dtype=x.dtype)  # [B] → [B,1,hidden]，作为 adaLN 条件
+        pos = self.fetch_pos(grid_hw[0], grid_hw[1], x.device)  # [N, head_dim//2] 复数 RoPE 表
         for block in self.blocks:
-            x = block(x, c, pos)
-        return self.output_proj(x)
+            x = block(x, c, pos)  # 形状保持 [B,N,hidden]
+        return self.output_proj(x)  # → [B,N,out_dim]

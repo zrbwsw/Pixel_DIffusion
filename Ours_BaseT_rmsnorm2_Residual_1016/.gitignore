@@ -39,3 +39,16 @@ fid_stats
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Public snapshot excludes machine-specific launch and queue scripts.
+scripts/
+*.sh
+*.bash
+*.ps1
+*.bat
+.env
+.env.*
+*.pem
+*.key
+auth*.json
+credentials*.json

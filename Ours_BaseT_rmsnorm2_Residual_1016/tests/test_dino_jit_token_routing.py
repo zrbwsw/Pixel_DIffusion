@@ -19,6 +19,7 @@ def make_router():
     router.dino_jit_pre_blend_rmsnorm = False
     router.dino_time_blend_transform = "linear"
     router.dino_time_blend_key = 100.0
+    router.dino_time_blend_a = 0.1
     router.dino_time_blend_reverse = False
     router.jit_pre_blend_norm = nn.Identity()
     router.dino_pre_blend_norm = nn.Identity()

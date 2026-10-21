@@ -37,6 +37,7 @@ class DINOJiTDenoiser(nn.Module):
         self.dino_time_blend_reverse = args.dino_time_blend_reverse
         self.dino_time_blend_transform = args.dino_time_blend_transform
         self.dino_time_blend_key = args.dino_time_blend_key
+        self.dino_time_blend_a = args.dino_time_blend_a
         self.dino_jit_pre_blend_rmsnorm = args.dino_jit_pre_blend_rmsnorm
         self.dino_preprocess_input = args.dino_preprocess_input
 
@@ -237,11 +238,11 @@ class DINOJiTDenoiser(nn.Module):
         projected_tokens = dino_tokens
         if self.dino_input_projector is not None:
             # PgT 将 DINO token 投影到 JiT 输入空间，并注入原始时间 t。
-            grid_hw = tuple(size // self.net.patch_size for size in noisy_image.shape[-2:])
+            grid_hw = tuple(size // self.net.patch_size for size in noisy_image.shape[-2:])  # noisy_image [B,3,H,W] → token 网格 (H/16, W/16)，256px 下为 (16,16)
             projected_tokens = self.dino_input_projector(
-                dino_tokens.to(dtype=self.dino_input_projector.input_proj.weight.dtype),
-                timesteps.flatten(), grid_hw,
-            )
+                dino_tokens.to(dtype=self.dino_input_projector.input_proj.weight.dtype),  # [B,N,768]（N=grid_h·grid_w=256，DINOv3-B 特征维），对齐 PgT 权重 dtype
+                timesteps.flatten(), grid_hw,  # 原始时间 t: [B]；grid_hw 供 PgT 内部 2D RoPE 定位
+            )  # 输出 [B,N,768]（JiT hidden_size），与 native_tokens 同形
         # 过各自的可学习rmsnrom
         native_tokens = self.jit_pre_blend_norm(native_tokens)
         projected_tokens = self.dino_pre_blend_norm(projected_tokens)
@@ -249,7 +250,7 @@ class DINOJiTDenoiser(nn.Module):
         blend_t = timesteps.flatten()
         if self.dino_time_blend_transform == "sigmoid":
             blend_t = sigmoid_blend_time(
-                blend_t, key=self.dino_time_blend_key,
+                blend_t, key=self.dino_time_blend_key, a=self.dino_time_blend_a,
             )
         t = blend_t.to(device=native_tokens.device, dtype=native_tokens.dtype)
         t = t.view(-1, 1, 1)
@@ -262,13 +263,11 @@ class DINOJiTDenoiser(nn.Module):
         grounding_drop_mask = torch.zeros(
             t.shape[0], device=t.device, dtype=torch.bool,
         )
-        if self.dino_grounding_drop_on_label_drop and label_drop_mask is not None:
-            grounding_drop_mask = label_drop_mask.flatten().to(
-                device=t.device, dtype=torch.bool,
-            )
-            mask = grounding_drop_mask.view(-1, 1, 1)
-            jit_weighted = torch.where(mask, native_tokens, jit_weighted)
-            dino_weighted = dino_weighted.masked_fill(mask, 0)
+        if self.dino_grounding_drop_on_label_drop and label_drop_mask is not None:  #DropRes逻辑，true则DINO path token随着label一同drop
+            grounding_drop_mask = label_drop_mask.flatten().to(device=t.device, dtype=torch.bool,)
+            mask = grounding_drop_mask.view(-1, 1, 1)   # [B] → [B,1,1]，便于对 token 维广播
+            jit_weighted = torch.where(mask, native_tokens, jit_weighted)   # 被 drop 的样本：直接用未加权的 JiT token
+            dino_weighted = dino_weighted.masked_fill(mask, 0)  # 被 drop 的样本：DINO 路贡献清零
         fused_tokens = jit_weighted + dino_weighted
         return fused_tokens, {
             "native_tokens": native_tokens,
@@ -321,9 +320,7 @@ class DINOJiTDenoiser(nn.Module):
         noisy_image: Optional[torch.Tensor] = None,
         alignment_depth: Optional[int] = None,
     ):
-        """沿用 JiT blocks；取第 alignment_depth 层做对齐，末层还原图像。
-        alignment_depth=4 对应 blocks[3]；采样时为 None，仅返回图像。
-        """
+        # 沿用 JiT blocks；取第 alignment_depth 层做对齐，末层还原图像。alignment_depth=4 对应 blocks[3]；采样时为 None，仅返回图像。
         net = self.net
         t_emb = net.t_embedder(timesteps)
         y_emb = net.y_embedder(labels)
@@ -357,7 +354,7 @@ class DINOJiTDenoiser(nn.Module):
             patches = net.final_layer(x, c)
         output = net.unpatchify(patches, net.patch_size)
 
-        if alignment_depth is None:
+        if alignment_depth is None: #　alignment_depth=4 对应 blocks[3]；采样时为 None，仅返回图像
             return output
         return output, alignment_tokens
 

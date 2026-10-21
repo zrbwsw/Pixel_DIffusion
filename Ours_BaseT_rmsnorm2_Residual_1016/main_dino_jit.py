@@ -106,9 +106,11 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument('--dino_time_blend_reverse', action=argparse.BooleanOptionalAction, default=False,
                         help='time_blend 使用 (1-t)*DINO+t*JiT。')
     parser.add_argument('--dino_time_blend_transform', choices=('linear', 'sigmoid'), default='linear',
-                        help='仅变换融合系数；sigmoid 为 sigmoid(key*(t-0.1))，其他时间条件不变。')
+                        help='仅变换融合系数；sigmoid 为 sigmoid(key*(t-a))，其他时间条件不变。')
     parser.add_argument('--dino_time_blend_key', type=float, default=100.0,
                         help='sigmoid 融合曲线的固定斜率，默认100。')
+    parser.add_argument('--dino_time_blend_a', type=float, default=0.1,
+                        help='sigmoid 融合曲线的中心点，t=a 时两路权重均为0.5，默认0.1。')
     parser.add_argument('--dino_grounding_drop_on_label_drop',
                         action=argparse.BooleanOptionalAction, default=False,
                         help='time_blend 的 null 类别只保留 JiT token；训练与 CFG 采样共用。')
