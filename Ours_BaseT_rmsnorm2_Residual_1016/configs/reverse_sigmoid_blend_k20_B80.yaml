@@ -1,19 +1,11 @@
-# Residual + t-dependent analytic DINO input normalization.
-# Historical BaseT recipe; retained for checkpoint compatibility.
-#
-# Controlled architecture change:
-#   old: DINO-LoRA MLS replaces native JiT patch tokens
-#   new: native JiT PatchEmbed + t * zero-initialized DINO residual adapter
-#
-# Here t is the clean-image weight in z_t=t*x+(1-t)*noise. The alignment
-# ConvProj remains alignment-only and is never reused by the residual path.
-# This architecture starts from scratch; resume only checkpoints from this
-# exact output directory.
+# Only transform blend weights: DINO=1-f(t), JiT=f(t), f(t)=sigmoid(20*(t-0.1)).
+# Same reverse baseline recipe: 4 GPUs x 256 = 1024, lr 2e-4.
+# Independent learned per-token RMSNorm on each path before t/(1-t) blending.
 
 experiment:
-  exp_name: Ours-J18-new-drop0.1-l4-BaseT-Residual-DinoTNorm-B-80
-  output_dir: checkpoints/Ours-J18-new-drop0.1-l4-BaseT-Residual-DinoTNorm-B-80
-  resume: checkpoints/Ours-J18-new-drop0.1-l4-BaseT-Residual-DinoTNorm-B-80
+  exp_name: BaseT-Residual(1-t,t)-NoDinoPre-PgT-blend_rmsnorm2-SigmoidBlendK20-NoDDTHead-B-80
+  output_dir: checkpoints/BaseT-Residual(1-t,t)-NoDinoPre-PgT-blend_rmsnorm2-SigmoidBlendK20-NoDDTHead-B-80
+  resume: ''
 
 data:
   data_path: ${IMAGENET_ROOT}
@@ -31,16 +23,19 @@ model:
     jit_add_pos_embed_to_dino_tokens: true
   dino_student:
     dino_model_name: dinov3_vitb16
-    dino_preprocess_input: true
-    dino_input_normalization: t_moment
+    dino_preprocess_input: false
     dino_weights: ${PRETRAIN_MODELS_ROOT}/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+    dino_generation_final_norm_affine: true
     dino_aggregation: mls
     dino_layers: default
   representation_residual:
-    dino_jit_input_mode: gated_residual
-    dino_residual_gate: clean_linear
-    dino_residual_hidden_dim: 768
-    dino_residual_drop_on_label_drop: false
+    dino_jit_input_mode: time_blend
+    dino_time_blend_reverse: true
+    dino_time_blend_transform: sigmoid
+    dino_time_blend_key: 20.0
+    dino_input_projector: pixeldit2
+    dino_jit_pre_blend_rmsnorm: true
+    dino_grounding_drop_on_label_drop: false
   lora:
     dino_lora_r: 64
     dino_lora_alpha: 64.0
@@ -58,6 +53,7 @@ alignment:
     dino_zscore_alpha: 0.8
 
 ddt_head:
+  use_ddt_head: false
   ddt_head_dim: 2048
   ddt_head_num_heads: 16
   ddt_head_depth: 2
@@ -73,11 +69,12 @@ diffusion:
 optimization:
   epochs: 80
   warmup_epochs: 5
-  batch_size: 64
-  global_batch_size: 256
+  batch_size: 256
+  global_batch_size: 1024
   accum_iter: 1
   lr: null
-  blr: 0.0001
+  # lr = blr * global_batch_size / 256 = 0.0002 after warmup.
+  blr: 0.00005
   min_lr: 0.0
   lr_schedule: constant
   weight_decay: 0.0
@@ -106,7 +103,7 @@ evaluation:
 logging:
   log_freq: 100
   metrics_log_freq: 100
-  metrics_log_name: residual_dinotnorm_diagnostics
+  metrics_log_name: blend_rmsnorm2_reverse_sigmoid_k20_no_ddt_head_diagnostics
   write_structured_metrics: true
 
 runtime:

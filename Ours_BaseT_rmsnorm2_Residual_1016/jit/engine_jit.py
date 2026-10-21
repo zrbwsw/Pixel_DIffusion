@@ -124,7 +124,6 @@ def _iter_named_parameters_by_group(model_without_ddp, group):
         is_dino_encoder = name.startswith("dino_student.")
         is_alignment_projector = name.startswith("dino_student_projector.")
         is_input_projector = name.startswith("dino_input_projector.")
-        is_residual_adapter = name.startswith("dino_residual_adapter.")
         is_dino_patch_embed = is_dino_encoder and ".patch_embed." in name
 
         if group == "jit" and is_jit:
@@ -156,8 +155,6 @@ def _iter_named_parameters_by_group(model_without_ddp, group):
         elif group == "alignment_projector" and is_alignment_projector:
             yield name, param
         elif group == "input_projector" and is_input_projector:
-            yield name, param
-        elif group == "residual_adapter" and is_residual_adapter:
             yield name, param
         elif group == "total":
             yield name, param
@@ -207,7 +204,6 @@ def _summarize_train_scalars(loss_value, reduced_loss_dict, lr, grad_stats, para
         "grad_norm/dino_patch_embed": grad_stats["dino_patch_embed"][0],
         "grad_norm/alignment_projector": grad_stats["alignment_projector"][0],
         "grad_norm/input_projector": grad_stats["input_projector"][0],
-        "grad_norm/residual_adapter": grad_stats["residual_adapter"][0],
         "grad_norm_ratio/alignment_projector_to_jit_pre_alignment": (
             grad_stats["alignment_projector"][0]
             / max(grad_stats["jit_pre_alignment"][0], 1e-12)
@@ -223,7 +219,6 @@ def _summarize_train_scalars(loss_value, reduced_loss_dict, lr, grad_stats, para
         "grad_param_count/dino_patch_embed": grad_stats["dino_patch_embed"][1],
         "grad_param_count/alignment_projector": grad_stats["alignment_projector"][1],
         "grad_param_count/input_projector": grad_stats["input_projector"][1],
-        "grad_param_count/residual_adapter": grad_stats["residual_adapter"][1],
         "param_norm": param_stats["total"][0],
         "param_norm/jit": param_stats["jit"][0],
         "param_norm/jit_pre_alignment": param_stats["jit_pre_alignment"][0],
@@ -235,7 +230,6 @@ def _summarize_train_scalars(loss_value, reduced_loss_dict, lr, grad_stats, para
         "param_norm/dino_patch_embed": param_stats["dino_patch_embed"][0],
         "param_norm/alignment_projector": param_stats["alignment_projector"][0],
         "param_norm/input_projector": param_stats["input_projector"][0],
-        "param_norm/residual_adapter": param_stats["residual_adapter"][0],
         "param_count/total": param_stats["total"][1],
         "param_count/jit": param_stats["jit"][1],
         "param_count/jit_pre_alignment": param_stats["jit_pre_alignment"][1],
@@ -247,7 +241,6 @@ def _summarize_train_scalars(loss_value, reduced_loss_dict, lr, grad_stats, para
         "param_count/dino_patch_embed": param_stats["dino_patch_embed"][1],
         "param_count/alignment_projector": param_stats["alignment_projector"][1],
         "param_count/input_projector": param_stats["input_projector"][1],
-        "param_count/residual_adapter": param_stats["residual_adapter"][1],
     }
 
 
@@ -323,7 +316,6 @@ def train_one_epoch(
                 "dino_patch_embed": _grad_norm(model_without_ddp, "dino_patch_embed"),
                 "alignment_projector": _grad_norm(model_without_ddp, "alignment_projector"),
                 "input_projector": _grad_norm(model_without_ddp, "input_projector"),
-                "residual_adapter": _grad_norm(model_without_ddp, "residual_adapter"),
             }
         if update_grad:
             # DDP 已在 backward 同步各 rank 梯度；一次 AdamW step 后更新两套 EMA。
@@ -345,7 +337,6 @@ def train_one_epoch(
                 "dino_patch_embed": _param_norm(model_without_ddp, "dino_patch_embed"),
                 "alignment_projector": _param_norm(model_without_ddp, "alignment_projector"),
                 "input_projector": _param_norm(model_without_ddp, "input_projector"),
-                "residual_adapter": _param_norm(model_without_ddp, "residual_adapter"),
             }
 
         metric_logger.update(loss=loss_value)
@@ -373,13 +364,11 @@ def train_one_epoch(
                 grad_norm_lora=train_scalars["grad_norm/lora"],
                 grad_norm_alignment_projector=train_scalars["grad_norm/alignment_projector"],
                 grad_norm_input_projector=train_scalars["grad_norm/input_projector"],
-                grad_norm_residual_adapter=train_scalars["grad_norm/residual_adapter"],
                 param_norm_jit=train_scalars["param_norm/jit"],
                 param_norm_ddt_head=train_scalars["param_norm/ddt_head"],
                 param_norm_lora=train_scalars["param_norm/lora"],
                 param_norm_alignment_projector=train_scalars["param_norm/alignment_projector"],
                 param_norm_input_projector=train_scalars["param_norm/input_projector"],
-                param_norm_residual_adapter=train_scalars["param_norm/residual_adapter"],
             )
 
 

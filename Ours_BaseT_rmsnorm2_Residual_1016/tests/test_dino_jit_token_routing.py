@@ -5,7 +5,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from dino_jit_denoiser import DINOJiTDenoiser, DINOResidualAdapter
+from dino_jit_denoiser import DINOJiTDenoiser
 from jit.engine_jit import _append_csv, _iter_named_parameters_by_group, _summarize_train_scalars
 from jit_ddt_head import JiTDDTHead
 from model_jit import JiT
@@ -17,6 +17,9 @@ def make_router():
     nn.Module.__init__(router)
     router.use_ddt_head = True
     router.dino_jit_pre_blend_rmsnorm = False
+    router.dino_time_blend_transform = "linear"
+    router.dino_time_blend_key = 100.0
+    router.dino_time_blend_reverse = False
     router.jit_pre_blend_norm = nn.Identity()
     router.dino_pre_blend_norm = nn.Identity()
     return router
@@ -35,15 +38,6 @@ class ConstantPatchEmbedder(nn.Module):
 
     def forward(self, images):
         return torch.full((images.shape[0], 4, 3), self.value, device=images.device)
-
-
-class ScaleTokens(nn.Module):
-    def __init__(self, scale):
-        super().__init__()
-        self.scale = scale
-
-    def forward(self, tokens):
-        return self.scale * tokens
 
 
 class TrainableTokens(nn.Module):
@@ -76,6 +70,10 @@ class RecordingEncoder(nn.Module):
     def forward(self, images):
         self.last_input = images.detach().clone()
         return images.flatten(2).transpose(1, 2)
+
+    def forward_features(self, images):
+        tokens = self(images)
+        return {"x_norm_clstoken": tokens.mean(1), "x_norm_patchtokens": tokens}
 
 
 class ZeroEmbedder(nn.Module):
@@ -121,60 +119,11 @@ class FakeJiT(nn.Module):
         return tokens
 
 
-def test_residual_adapter_starts_at_exact_zero():
-    adapter = DINOResidualAdapter(input_dim=3, hidden_dim=5, output_dim=3)
-    output = adapter(torch.randn(2, 4, 3))
-    torch.testing.assert_close(output, torch.zeros_like(output))
-    torch.testing.assert_close(adapter.fc2.weight, torch.zeros_like(adapter.fc2.weight))
-
-
-@pytest.mark.parametrize("gate_kind,expected", [
-    ("clean_linear", [2.0, 5.0]),
-    ("constant_one", [5.0, 5.0]),
-])
-def test_residual_gate_behavior(gate_kind, expected):
-    router = make_router()
-    router.dino_jit_input_mode = "gated_residual"
-    router.dino_residual_gate = gate_kind
-    router.dino_residual_drop_on_label_drop = False
-    router.net = nn.Module()
-    router.net.x_embedder = ConstantPatchEmbedder(2.0)
-    router.dino_residual_adapter = ScaleTokens(3.0)
-    fused, diagnostics = router._compose_jit_input_tokens(
-        torch.zeros(2, 3, 2, 2), torch.ones(2, 4, 3), torch.tensor([0.0, 1.0])
-    )
-    torch.testing.assert_close(fused[:, 0, 0], torch.tensor(expected))
-    assert diagnostics is not None
-    torch.testing.assert_close(diagnostics["gate"][:, 0, 0], torch.tensor([(v - 2) / 3 for v in expected]))
-
-
-def test_label_drop_zeros_only_residual_path_during_sampling():
-    router = make_router()
-    router.dino_jit_input_mode = "gated_residual"
-    router.dino_residual_gate = "clean_linear"
-    router.dino_residual_drop_on_label_drop = True
-    router.dino_grounding_drop_on_label_drop = False
-    router.dino_preprocess_input = False
-    router.num_classes = 1000
-    router.dino_student = RecordingEncoder()
-    router.net = nn.Module()
-    router.net.x_embedder = ConstantPatchEmbedder(2.0)
-    router.dino_residual_adapter = ScaleTokens(3.0)
-    router._jit_forward_from_tokens = lambda tokens, *_, **__: tokens
-
-    _, tokens = router._predict_clean_from_noisy(
-        torch.ones(2, 3, 2, 2), torch.tensor([0.25, 0.75]),
-        torch.tensor([5, router.num_classes]),
-    )
-    torch.testing.assert_close(tokens[:, 0, 0], torch.tensor([2.75, 2.0]))
-
-
 def make_blend_router(drop_grounding=False, reverse=False):
     router = make_router()
     router.dino_jit_input_mode = "time_blend"
     router.dino_grounding_drop_on_label_drop = drop_grounding
     router.dino_time_blend_reverse = reverse
-    router.dino_residual_drop_on_label_drop = False
     router.dino_preprocess_input = False
     router.num_classes = 1000
     router.dino_student = RecordingEncoder()
@@ -250,9 +199,9 @@ def test_time_blend_weights_sum_to_one_at_endpoints_and_midpoint(reverse, expect
     )
 
 
-def test_time_blend_without_reverse_attribute_keeps_legacy_weights():
+def test_time_blend_default_uses_forward_weights():
     router = make_blend_router()
-    del router.dino_time_blend_reverse
+    assert not router.dino_time_blend_reverse
     fused, _ = router._compose_jit_input_tokens(
         torch.zeros(3, 3, 2, 2), torch.full((3, 4, 3), 6.0),
         torch.tensor([0.0, 0.25, 1.0]),
@@ -452,25 +401,43 @@ def test_no_ddt_output_matches_native_jit_and_backpropagates(alignment_depth):
 
 
 def make_preprocess_router(enabled):
-    router = make_router()
+    router = make_blend_router()
     router.dino_preprocess_input = enabled
-    router.dino_jit_input_mode = "replace"
-    router.dino_residual_drop_on_label_drop = False
     router.dino_grounding_drop_on_label_drop = False
     router.dino_student = RecordingEncoder()
     router._teacher_box = [RecordingEncoder()]
     router._teacher_device = torch.device("cpu")
     router.register_buffer("dino_mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
     router.register_buffer("dino_std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+    router.register_buffer("dino_mean_pm1", 2.0 * router.dino_mean - 1.0)
+    router.register_buffer("dino_std_pm1", 2.0 * router.dino_std)
     return router
 
 
+def imagenet_norm(router, x):
+    # 与 _encode_teacher_target 中写死的 ImageNet 标准化一致。
+    x01 = (x.float() + 1.0) * 0.5
+    return (x01 - router.dino_mean) / router.dino_std
+
+
+def t_moment_norm(router, z, t_value):
+    # 与 _preprocess_noisy_student_for_dino 的解析公式一致。
+    t = torch.full((z.shape[0], 1, 1, 1), t_value)
+    mean_t = t * router.dino_mean_pm1
+    std_t = (
+        t.square() * router.dino_std_pm1.square()
+        + (1 - t).square() * router.noise_scale ** 2
+    ).sqrt()
+    return (z.float() - mean_t) / std_t
+
+
 @pytest.mark.parametrize("enabled", [True, False])
-def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled):
+@pytest.mark.parametrize("noise_scale", [0.5, 2.0])
+def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled, noise_scale):
     router = make_preprocess_router(enabled)
     router.label_drop_prob = 0.0
     router.num_classes = 1000
-    router.noise_scale = 1.0
+    router.noise_scale = noise_scale
     router.t_eps = 0.05
     router.dino_zscore_alpha = 0.8
     router.dino_student_projector = nn.Identity()
@@ -487,22 +454,41 @@ def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled
     clean = torch.linspace(-1, 1, steps=24).reshape(2, 3, 2, 2)
     loss, metrics = router(clean, torch.tensor([3, 7]))
 
-    train_input = router._preprocess_for_dino(noisy_seen[0]) if enabled else noisy_seen[0]
+    train_input = t_moment_norm(router, noisy_seen[0], 0.5) if enabled else noisy_seen[0]
     torch.testing.assert_close(router.dino_student.last_input, train_input)
-    torch.testing.assert_close(router.teacher.last_input, router._preprocess_for_dino(clean))
+    torch.testing.assert_close(router.teacher.last_input, imagenet_norm(router, clean))
     assert router.teacher.last_input.requires_grad is False
     assert loss.item() == pytest.approx(metrics["denoise_loss"] + 0.5 * metrics["alignment_loss"], abs=1e-5)
     assert metrics["alignment_loss_weighted"] == pytest.approx(0.5 * metrics["alignment_loss"])
 
     noisy = torch.full_like(clean, 0.25)
     router._predict_clean_from_noisy(noisy, torch.full((2,), 0.5), torch.tensor([3, 7]))
-    sample_input = router._preprocess_for_dino(noisy) if enabled else noisy
+    sample_input = t_moment_norm(router, noisy, 0.5) if enabled else noisy
     torch.testing.assert_close(router.dino_student.last_input, sample_input)
+
+
+@pytest.mark.parametrize("noise_scale", [0.5, 2.0])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_analytic_norm_endpoints_and_original_time(noise_scale, dtype):
+    router = make_preprocess_router(True)
+    router.noise_scale = noise_scale
+    router.dino_time_blend_transform = "sigmoid"
+    router.dino_time_blend_key = 100.0
+    z = torch.linspace(-1, 1, 24).reshape(2, 3, 2, 2).to(dtype)
+    t = torch.tensor([0.0, 1.0])
+    result = router._preprocess_noisy_student_for_dino(z, t)
+    # t=0 还原标准噪声；t=1 等价于干净图像的 ImageNet norm。
+    torch.testing.assert_close(result[0], z[0].float() / noise_scale)
+    torch.testing.assert_close(result[1], imagenet_norm(router, z)[1])
+    assert result.dtype == torch.float32
+    # sigmoid 只改融合系数，student 解析 norm 始终使用原始 t。
+    t = torch.full((2,), 0.1)
+    router._encode_noisy_student(z, t)
+    torch.testing.assert_close(router.dino_student.last_input, t_moment_norm(router, z, 0.1))
 
 
 def test_t_moment_normalization_matches_diffusion_moments():
     router = make_router()
-    router.dino_input_normalization = "t_moment"
     router.dino_preprocess_input = True
     router.noise_scale = 1.0
     router.register_buffer(
@@ -532,15 +518,6 @@ def test_t_moment_normalization_matches_diffusion_moments():
         ]
     )
     torch.testing.assert_close(actual, (noisy - mean_t) / std_t)
-
-
-def test_t_moment_student_requires_timesteps():
-    router = make_router()
-    router.dino_input_normalization = "t_moment"
-    router.dino_preprocess_input = True
-    router.dino_student = RecordingEncoder()
-    with pytest.raises(ValueError, match="requires diffusion timesteps"):
-        router._encode_noisy_student(torch.zeros(1, 3, 2, 2))
 
 
 def test_time_blend_reports_native_projected_weighted_and_fused_norms():
@@ -639,7 +616,7 @@ def test_structured_metrics_use_current_objective_names():
     groups = (
         "total", "jit", "jit_pre_alignment", "jit_post_alignment", "ddt_head",
         "jit_plus_ddt", "lora", "dino_non_lora", "dino_patch_embed",
-        "alignment_projector", "input_projector", "residual_adapter",
+        "alignment_projector", "input_projector",
     )
     norms = {group: (0.0, 0) for group in groups}
     summary = _summarize_train_scalars(

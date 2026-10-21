@@ -126,6 +126,11 @@ def load_grouped_yaml_defaults(
         raise ValueError(f"YAML config root must be a mapping: {path}")
 
     values, origins = _flatten_grouped_config(document)
+    # 兼容旧 native/time_blend 保存的配置：这三个旧残差字段从未参与其计算。
+    if values.get("dino_jit_input_mode") in ("native", "time_blend"):
+        for key in ("dino_residual_gate", "dino_residual_hidden_dim",
+                    "dino_residual_drop_on_label_drop"):
+            values.pop(key, None)
     actions = {
         action.dest: action
         for action in parser._actions

@@ -36,9 +36,6 @@ model:
     dino_input_projector: pixeldit2
     dino_jit_pre_blend_rmsnorm: true
     dino_grounding_drop_on_label_drop: false
-    dino_residual_gate: none
-    dino_residual_hidden_dim: 0
-    dino_residual_drop_on_label_drop: false
   lora:
     dino_lora_r: 64
     dino_lora_alpha: 64.0

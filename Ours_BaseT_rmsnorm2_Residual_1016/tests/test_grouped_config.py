@@ -14,11 +14,6 @@ from main_dino_jit import add_dino_jit_args
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = "Ours-J18-new-drop0.1-l4-BaseT-B-80"
-RESIDUAL = "Ours-J18-new-drop0.1-l4-BaseT-Residual-B-80"
-RESIDUAL_DINOTNORM = "Ours-J18-new-drop0.1-l4-BaseT-Residual-DinoTNorm-B-80"
-G1 = "Ours-J18-new-drop0.1-l4-BaseT-Residual-G1-B-80"
-DROPRES = "Ours-J18-new-drop0.1-l4-BaseT-Residual-DropRes-B-80"
 TIME_BLEND = "BaseT-Residual(t,1-t)-NoDinoPre-PgT-B-80"
 NO_DDT = "BaseT-Residual(t,1-t)-NoDinoPre-PgT-NoDDTHead-B-80"
 RMSNORM_NO_DDT = "BaseT-Residual(t,1-t)-NoDinoPre-PgT-blend_rmsnorm-NoDDTHead-B-80"
@@ -80,22 +75,37 @@ def test_duplicate_leaf_is_rejected(tmp_path):
         load_grouped_yaml_defaults(_parser(), config)
 
 
-@pytest.mark.parametrize("name", [BASE, RESIDUAL, RESIDUAL_DINOTNORM, G1, DROPRES])
-def test_active_configs_parse_strictly_and_preserve_current_objective(name):
-    args = _args(name)
-    assert args.dino_preprocess_input is True
-    assert args.dino_aggregation == "mls"
-    assert args.dino_layers == "default"
+@pytest.mark.parametrize("config", sorted((ROOT / "configs").glob("*.yaml")), ids=lambda p: p.stem)
+def test_all_active_configs_use_supported_inputs_and_preserve_alignment(config):
+    args = _args(config.stem)
+    assert args.dino_jit_input_mode in {"native", "time_blend"}
+    assert not any(key.startswith("dino_residual_") for key in vars(args))
     assert args.jit_alignment_depth == 4
     assert args.dino_projector_kernel_size == 3
     assert args.dino_zscore_alpha == pytest.approx(0.8)
-    assert args.ddt_head_dim == 2048
-    assert args.ddt_head_depth == 2
-    assert args.use_ddt_head is True
-    assert args.hflip_prob == pytest.approx(0.5)
-    assert args.label_drop_prob == pytest.approx(0.1)
-    assert args.global_batch_size == 256
-    assert args.epochs == 80
+
+
+@pytest.mark.parametrize("mode", ["replace", "gated_residual"])
+def test_removed_input_modes_are_rejected(mode, tmp_path):
+    with pytest.raises(SystemExit):
+        parse_args_with_config(_active_parser(), ["--dino_jit_input_mode", mode])
+    config = tmp_path / "old-mode.yaml"
+    config.write_text(f"model:\n  dino_jit_input_mode: {mode}\n")
+    with pytest.raises(ValueError, match="dino_jit_input_mode"):
+        load_grouped_yaml_defaults(_active_parser(), config)
+
+
+@pytest.mark.parametrize("mode", ["native", "time_blend"])
+def test_old_saved_supported_configs_ignore_unused_residual_fields(mode, tmp_path):
+    config = tmp_path / "saved.yaml"
+    config.write_text(
+        f"model:\n  dino_jit_input_mode: {mode}\n"
+        "  dino_residual_gate: none\n  dino_residual_hidden_dim: 0\n"
+        "  dino_residual_drop_on_label_drop: false\n"
+    )
+    args = parse_args_with_config(_active_parser(), ["--config", str(config)])
+    assert args.dino_jit_input_mode == mode
+    assert not any(key.startswith("dino_residual_") for key in vars(args))
 
 
 def test_no_residual_native_irepa_config_routes_only_native_jit_tokens():
@@ -109,77 +119,22 @@ def test_no_residual_native_irepa_config_routes_only_native_jit_tokens():
     assert args.jit_add_pos_embed_to_dino_tokens is True
 
 
-def test_baset_and_residual_preserve_different_positional_embedding_settings():
-    base, residual = _args(BASE), _args(RESIDUAL)
-    assert base.dino_jit_input_mode == "replace"
-    assert base.jit_add_pos_embed_to_dino_tokens is False
-    assert base.dino_residual_gate == "none"
-    assert base.dino_residual_hidden_dim == 0
-    assert residual.dino_jit_input_mode == "gated_residual"
-    assert residual.jit_add_pos_embed_to_dino_tokens is True
-    assert residual.dino_residual_gate == "clean_linear"
-    assert residual.dino_residual_hidden_dim == 768
-    assert residual.dino_residual_drop_on_label_drop is False
+def test_preprocess_flag_defaults_on_and_cli_overrides_yaml():
+    assert parse_args_with_config(_active_parser(), []).dino_preprocess_input is True
+    assert _args(TIME_BLEND).dino_preprocess_input is False
+    assert _args(TIME_BLEND, "--dino_preprocess_input").dino_preprocess_input is True
+    assert _args(NATIVE, "--no-dino_preprocess_input").dino_preprocess_input is False
 
 
-def test_residual_ablation_configs_change_only_the_intended_control():
-    gate_one, drop_residual = _args(G1), _args(DROPRES)
-    assert gate_one.dino_residual_gate == "constant_one"
-    assert gate_one.dino_residual_drop_on_label_drop is False
-    assert drop_residual.dino_residual_gate == "clean_linear"
-    assert drop_residual.dino_residual_drop_on_label_drop is True
-    ignored = {
-        "config", "dino_residual_gate", "dino_residual_drop_on_label_drop",
-        "exp_name", "output_dir", "resume",
-    }
-    assert {
-        key for key in vars(gate_one)
-        if getattr(gate_one, key) != getattr(drop_residual, key)
-    } == ignored
-
-
-def test_preprocess_flag_defaults_on_and_cli_can_disable_yaml_value():
-    assert _args(RESIDUAL).dino_preprocess_input is True
-    assert _args(RESIDUAL, "--no-dino_preprocess_input").dino_preprocess_input is False
-    assert _args(RESIDUAL, "--dino_preprocess_input").dino_preprocess_input is True
-
-
-def test_residual_dinotnorm_only_changes_noisy_student_normalization():
-    residual, dinotnorm = _args(RESIDUAL), _args(RESIDUAL_DINOTNORM)
-    assert residual.dino_input_normalization == "standard"
-    assert dinotnorm.dino_input_normalization == "t_moment"
-    assert dinotnorm.dino_jit_input_mode == "gated_residual"
-    assert dinotnorm.dino_residual_gate == "clean_linear"
-    changed = {
-        key for key in vars(residual) if getattr(residual, key) != getattr(dinotnorm, key)
-    }
-    assert changed == {
-        "config", "exp_name", "output_dir", "resume",
-        "metrics_log_name", "dino_input_normalization",
-    }
-
-
-def test_time_blend_config_only_changes_the_intended_architecture_and_name():
-    old, new = _args(RESIDUAL), _args(TIME_BLEND)
-    assert new.dino_preprocess_input is False
-    assert new.dino_jit_input_mode == "time_blend"
-    assert new.dino_input_projector == "pixeldit2"
-    assert new.dino_grounding_drop_on_label_drop is False
-    assert new.dino_residual_gate == "none"
-    assert new.dino_residual_hidden_dim == 0
-    assert new.dino_residual_drop_on_label_drop is False
-    changed = {
-        key for key in vars(old) if getattr(old, key) != getattr(new, key)
-    }
-    assert changed == {
-        "config", "exp_name", "output_dir", "resume", "metrics_log_name",
-        "dino_preprocess_input", "dino_jit_input_mode", "dino_input_projector",
-        "dino_residual_gate", "dino_residual_hidden_dim",
-    }
-    assert new.output_dir == new.resume
-    assert new.batch_size == 64
-    assert new.global_batch_size == 256
-    assert new.epochs == 80
+def test_time_blend_is_default_and_yaml_retains_recipe():
+    assert parse_args_with_config(_active_parser(), []).dino_jit_input_mode == "time_blend"
+    args = _args(TIME_BLEND)
+    assert args.dino_jit_input_mode == "time_blend"
+    assert args.dino_input_projector == "pixeldit2"
+    assert not args.dino_grounding_drop_on_label_drop
+    assert args.output_dir == args.resume
+    assert args.batch_size == 64 and args.global_batch_size == 256
+    assert args.epochs == 80
 
 
 def test_no_ddt_ablation_changes_only_the_output_head_and_experiment_paths():
@@ -198,7 +153,7 @@ def test_no_ddt_ablation_changes_only_the_output_head_and_experiment_paths():
 def test_offline_sampling_preserves_preprocess_setting(tmp_path):
     import yaml
 
-    config = yaml.safe_load((ROOT / "configs" / f"{RESIDUAL}.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((ROOT / "configs" / f"{TIME_BLEND}.yaml").read_text(encoding="utf-8"))
     config["model"]["dino_student"]["dino_preprocess_input"] = False
     config_path = tmp_path / "no-preprocess.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -214,7 +169,6 @@ def test_rmsnorm_dropres_changes_only_null_label_routing_and_experiment_paths():
     base, dropres = _args(RMSNORM_NO_DDT), _args(RMSNORM_DROPRES)
     assert dropres.dino_jit_pre_blend_rmsnorm is True
     assert dropres.dino_grounding_drop_on_label_drop is True
-    assert dropres.dino_residual_drop_on_label_drop is False
     assert dropres.use_ddt_head is False
     assert dropres.output_dir == dropres.resume == f"checkpoints/{RMSNORM_DROPRES}"
     assert dropres.start_epoch == 0
@@ -294,6 +248,7 @@ def test_offline_sampling_preserves_time_blend_and_cfg_null_policy(tmp_path, nam
     "dino_alignment_time_weight_normalizer", "dino_clamp_input",
     "dino_feature_normalize", "dino_projector_feed_jit",
     "use_time_tokens", "time_token_count",
+    "dino_residual_gate", "dino_residual_hidden_dim", "dino_residual_drop_on_label_drop",
 ])
 def test_removed_options_are_rejected_by_cli_and_grouped_yaml(obsolete, tmp_path):
     with pytest.raises(SystemExit):
@@ -304,13 +259,8 @@ def test_removed_options_are_rejected_by_cli_and_grouped_yaml(obsolete, tmp_path
         load_grouped_yaml_defaults(_active_parser(), config)
 
 
-@pytest.mark.parametrize("name,train_native", [
-    (BASE, False), (RESIDUAL, True), (TIME_BLEND, True), (NO_DDT, True),
-    (NATIVE, True),
-    (RMSNORM_DROPRES, True),
-    (RMSNORM2_NO_DDT, True),
-])
-def test_native_patch_embed_trainability_and_residual_initialization(monkeypatch, name, train_native):
+@pytest.mark.parametrize("name", [TIME_BLEND, NO_DDT, NATIVE, RMSNORM_DROPRES, RMSNORM2_NO_DDT])
+def test_native_patch_embed_is_trainable_and_generation_branch_is_optional(monkeypatch, name):
     args = _args(name)
 
     class TinyJiT(nn.Module):
@@ -334,33 +284,25 @@ def test_native_patch_embed_trainability_and_residual_initialization(monkeypatch
     monkeypatch.setitem(dino_jit_denoiser.JiT_models, args.model, lambda **_: TinyJiT())
     monkeypatch.setattr(dino_jit_denoiser, "JiTDDTHead", TinyModule)
     monkeypatch.setattr(dino_jit_denoiser, "ProjectionLayer", TinyModule)
-    monkeypatch.setattr(dino_jit_denoiser, "build_encoder", lambda *_args, **_: TinyEncoder())
+    monkeypatch.setattr(dino_jit_denoiser, "build_irepa_teacher", lambda *_args, **_: TinyEncoder())
+    monkeypatch.setattr(dino_jit_denoiser, "build_dino_student", lambda *_args, **_: TinyEncoder())
 
     model = DINOJiTDenoiser(args)
-    assert all(p.requires_grad == train_native for p in model.net.x_embedder.parameters())
+    assert all(p.requires_grad for p in model.net.x_embedder.parameters())
     no_ddt = name in {NO_DDT, RMSNORM_DROPRES, RMSNORM2_NO_DDT}
     assert all(p.requires_grad == no_ddt for p in model.net.final_layer.parameters())
     assert (model.ddt_head is None) is no_ddt
     assert any(key.startswith("ddt_head.") for key in model.state_dict()) is not no_ddt
-    if name == RESIDUAL:
-        assert model.dino_residual_adapter is not None
-        assert sum(p.numel() for p in model.dino_residual_adapter.parameters()) == 1_182_720
-        assert model.dino_residual_adapter.fc2.weight.count_nonzero().item() == 0
-        assert model.dino_input_projector is None
-    elif name in {TIME_BLEND, NO_DDT, RMSNORM_DROPRES, RMSNORM2_NO_DDT}:
-        assert model.dino_residual_adapter is None
-        assert isinstance(model.dino_input_projector, TimestepProjection)
-        assert any(p.requires_grad for p in model.dino_input_projector.parameters())
-    elif name == NATIVE:
+    if name == NATIVE:
         assert model.dino_student is None
-        assert model.dino_residual_adapter is None
         assert model.dino_input_projector is None
         assert model.dino_student_projector is not None
         assert model.ddt_head is not None
         assert any(p.requires_grad for p in model.dino_student_projector.parameters())
     else:
-        assert model.dino_residual_adapter is None
-        assert model.dino_input_projector is None
+        assert model.dino_student is not None
+        assert isinstance(model.dino_input_projector, TimestepProjection)
+        assert any(p.requires_grad for p in model.dino_input_projector.parameters())
 
     if name == RMSNORM2_NO_DDT:
         jit_gain = model.jit_pre_blend_norm.weight

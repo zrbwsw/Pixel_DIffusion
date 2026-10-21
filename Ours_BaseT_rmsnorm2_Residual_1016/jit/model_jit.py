@@ -8,8 +8,8 @@
 标准 ``JiT.forward`` 是 image -> BottleneckPatchEmbed -> JiT blocks ->
 FinalLayer。DINO+JiT 不直接调用这个 forward，而是在
 ``dino_jit_denoiser._jit_forward_from_tokens`` 中接收预先构造的空间 token。
-``replace`` 模式直接使用 DINOv3 MLS token；``residual`` 和 ``time_blend`` 模式
-在进入 blocks 前融合 JiT 原生 PatchEmbed 与 DINO token。类别/时间 embedding、
+``native`` 只用 JiT PatchEmbed；``time_blend`` 在进入 blocks 前
+按时间融合 JiT PatchEmbed 与 DINO token。类别/时间 embedding、
 32 个 in-context class token、RoPE 和 AdaLN 仍完全复用本文件。
 
 形状里的 ``B`` 是单个 DDP rank 的本地 batch，不是有效全局 batch。
@@ -32,8 +32,7 @@ class BottleneckPatchEmbed(nn.Module):
     """JiT 原生两阶段图像 patch embedding。
 
     对 256x256、patch16：``[B,3,256,256] -> [B,128,16,16] ->
-    [B,768,16,16] -> [B,256,768]``（JiT-B）。``replace`` 模式的主干输入
-    来自 DINO，因此该模块被冻结并绕过；融合模式保留它作为 JiT 图像分支。
+    [B,768,16,16] -> [B,256,768]``（JiT-B）。两种输入模式都训练此模块。
     可选的 DDTHead 另有一个同类 embedder，把 noisy image 嵌入 head stream；
     两者参数不共享。
     """

@@ -9,7 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import dino_v3_lora
-from dino_encoder import build_encoder
+import irepa_teacher
+from dino_encoder import build_dino_student, build_irepa_teacher
 
 
 class _TinyDINOv3(nn.Module):
@@ -20,6 +21,7 @@ class _TinyDINOv3(nn.Module):
         self.embed_dim = 4
         self.patch_size = 16
         self.patch_embed = nn.Linear(4, 4)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, 4))
         self.blocks = nn.ModuleList([nn.LayerNorm(4), nn.LayerNorm(4)])
         self.norm = nn.LayerNorm(4, eps=3e-4)
         with torch.no_grad():
@@ -37,30 +39,41 @@ class _TinyDINOv3(nn.Module):
         indices = range(len(layers) - n, len(layers)) if isinstance(n, int) else n
         return tuple(self.norm(layers[i]) if norm else layers[i] for i in indices)
 
+    def forward_features(self, x):
+        tokens = self.norm(self.raw_layers(x)[-1])
+        return {"x_norm_clstoken": tokens[:, 0], "x_norm_patchtokens": tokens}
+
 
 @pytest.fixture
 def pretrained(monkeypatch):
     torch.manual_seed(17)
     model = _TinyDINOv3().double().eval()
     monkeypatch.setattr(dino_v3_lora, "load_dino_v3", lambda **_: deepcopy(model))
+    monkeypatch.setattr(irepa_teacher, "load_dino_v3", lambda **_: deepcopy(model))
     return model
 
 
 def _args(**overrides):
-    values = dict(dino_aggregation="mls", dino_layers="0,1")
+    values = dict(
+        dino_model_name="dinov3_vitb16", dino_weights="",
+        dino_aggregation="mls", dino_layers="0,1",
+        dino_lora_r=16, dino_lora_alpha=16.0, dino_lora_dropout=0.0,
+        dino_lora_target_modules="qkv,proj,fc1,fc2",
+        dino_train_patch_embed=True, dino_train_final_norm=False,
+        dino_generation_final_norm_affine=True,
+    )
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
 @pytest.mark.parametrize("affine", [False, True])
 def test_generation_option_leaves_teacher_weights_and_outputs_unchanged(pretrained, affine):
-    teacher = build_encoder(
-        _args(dino_generation_final_norm_affine=affine), role="teacher"
+    teacher = build_irepa_teacher(
+        _args(dino_generation_final_norm_affine=affine)
     )
-    assert teacher.aggregation == "none"
-    assert teacher._layer_indices is None
-    assert not teacher.use_lora
-    assert teacher.num_lora_modules == 0
+    assert isinstance(teacher, irepa_teacher.FrozenDINOv3Encoder)
+    assert not isinstance(teacher, dino_v3_lora.DINOv3PatchTokenEncoder)
+    assert not any(module.training for module in teacher.modules())
     assert not any(parameter.requires_grad for parameter in teacher.parameters())
     assert teacher.model.norm.elementwise_affine
     assert teacher.model.state_dict().keys() == pretrained.state_dict().keys()
@@ -70,12 +83,14 @@ def test_generation_option_leaves_teacher_weights_and_outputs_unchanged(pretrain
     expected = pretrained.get_intermediate_layers(
         x, n=1, reshape=False, return_class_token=False, norm=True
     )[0]
-    torch.testing.assert_close(teacher(x), expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        teacher.forward_features(x)["x_norm_patchtokens"], expected, rtol=0, atol=0
+    )
 
 
 def test_student_default_retains_affine_and_checkpoint_layout(pretrained):
-    default = build_encoder(_args(), role="student")
-    explicit = build_encoder(_args(dino_generation_final_norm_affine=True), role="student")
+    default = build_dino_student(_args())
+    explicit = build_dino_student(_args(dino_generation_final_norm_affine=True))
     assert default.model.norm.elementwise_affine
     assert default.model.state_dict().keys() == pretrained.state_dict().keys()
     for name, expected in pretrained.state_dict().items():
@@ -85,8 +100,8 @@ def test_student_default_retains_affine_and_checkpoint_layout(pretrained):
 
 
 def test_student_noaffine_removes_only_final_ln_parameters_and_normalizes_mls(pretrained):
-    student = build_encoder(
-        _args(dino_generation_final_norm_affine=False), role="student"
+    student = build_dino_student(
+        _args(dino_generation_final_norm_affine=False)
     )
     final_norm = student.model.norm
     assert not final_norm.elementwise_affine
@@ -111,7 +126,7 @@ def test_student_noaffine_removes_only_final_ln_parameters_and_normalizes_mls(pr
     assert mls.dtype == x.dtype and mls.device == x.device
     torch.testing.assert_close(mls, expected_mls)
     torch.testing.assert_close(last, normalized[-1])
-    baseline = build_encoder(_args(), role="student")
+    baseline = build_dino_student(_args())
     assert not torch.allclose(mls, baseline(x))
     mls.square().sum().backward()
     assert x.grad is not None and torch.isfinite(x.grad).all()
