@@ -92,6 +92,10 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument('--dino_preprocess_input', action=argparse.BooleanOptionalAction, default=True,
                         help='true：对带噪图像做 t 相关解析标准化；false：不做预处理（NoDinoPre）。')
 
+    # iREPA 对齐总开关：--no-irepa_alignment 不构建 teacher、不算对齐 loss。
+    parser.add_argument('--irepa_alignment', action=argparse.BooleanOptionalAction, default=True,
+                        help='默认开启；关闭则跳过 frozen teacher 前向与 iREPA 对齐，只训练生成路径。')
+
     # iREPA 对齐目标的空间标准化。
     parser.add_argument('--dino_zscore_alpha', default=0.8, type=float, help='对齐目标的空间均值扣除系数，默认0.8。')
 

@@ -5,11 +5,8 @@ student：带噪图像 → DINO+LoRA → 选层 / MLS → 生成侧 token。
 """
 
 from __future__ import annotations
-
 import torch.nn as nn
-
 from irepa_teacher import FrozenDINOv3Encoder
-
 
 _DINOV3_TOTAL_BLOCKS = {
     "dinov3_vits16": 12,
@@ -17,13 +14,20 @@ _DINOV3_TOTAL_BLOCKS = {
     "dinov3_vitl16": 24,
 }
 
+_DINOV3_EMBED_DIMS = {
+    "dinov3_vits16": 384,
+    "dinov3_vitb16": 768,
+    "dinov3_vitl16": 1024,
+}
+
+
+def dinov3_embed_dim(model_name: str) -> int:
+    """不加载模型直接查特征维；noirepa 模式下用它代替 teacher.embed_dim。"""
+    return _DINOV3_EMBED_DIMS[model_name.lower()]
 
 def _backbone_kwargs(args) -> dict:
     # 共享模型名和权重路径；两条路径各自加载独立实例。
-    return dict(
-        model_name=args.dino_model_name.lower(),
-        weights_path=args.dino_weights or None,
-    )
+    return dict(model_name=args.dino_model_name.lower(), weights_path=args.dino_weights or None, )
 
 
 def _resolve_student_layers(args, total_blocks_hint: int = 12):

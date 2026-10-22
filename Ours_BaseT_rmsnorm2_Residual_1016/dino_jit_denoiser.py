@@ -20,7 +20,7 @@ from pixeldit2_projector import TimestepProjection
 from projectors import ProjectionLayer
 from util.model_util import RMSNorm
 
-from dino_encoder import build_dino_student, build_irepa_teacher
+from dino_encoder import build_dino_student, build_irepa_teacher, dinov3_embed_dim
 from jit_ddt_head import JiTDDTHead
 from blend_time import sigmoid_blend_time
 
@@ -77,22 +77,30 @@ class DINOJiTDenoiser(nn.Module):
         self.dino_zscore_alpha = args.dino_zscore_alpha
         self.jit_alignment_depth = args.jit_alignment_depth
 
-        teacher = build_irepa_teacher(args)
-        # teacher 自身负责冻结和 eval；普通 list 保持它不进入 checkpoint / EMA。
-        self._teacher_box = [teacher]
+        self.irepa_alignment = args.irepa_alignment
+        if self.irepa_alignment:
+            teacher = build_irepa_teacher(args)
+            # teacher 自身负责冻结和 eval；普通 list 保持它不进入 checkpoint / EMA。
+            self._teacher_box = [teacher]
+            dino_feature_dim = int(teacher.embed_dim)
+        else:
+            # noirepa：不构建 teacher，特征维从模型名查表。
+            self._teacher_box = [None]
+            dino_feature_dim = dinov3_embed_dim(args.dino_model_name)
         self._teacher_device: Optional[torch.device] = None
 
         # native 仅 JiT+iREPA；time_blend 增加生成侧 DINO+LoRA。
         self.dino_student: Optional[nn.Module] = None
         if self.dino_jit_input_mode == "time_blend":
             self.dino_student = build_dino_student(args)
-        dino_feature_dim = int(teacher.embed_dim)
-        self.dino_student_projector = ProjectionLayer(  # irepa convproj
-            "conv",                                     # 类型：3x3 卷积投影（而非 MLP）
-            hidden_size=self.net.hidden_size,           # 输入：JiT 中间层特征（B/16 为 768）
-            z_dim=dino_feature_dim,                     # 输出：teacher 特征维度（DINOv3-B 为 768）
-            proj_kwargs_kernel_size=int(args.dino_projector_kernel_size),
-        )
+        self.dino_student_projector: Optional[nn.Module] = None
+        if self.irepa_alignment:
+            self.dino_student_projector = ProjectionLayer(  # irepa convproj
+                "conv",                                     # 类型：3x3 卷积投影（而非 MLP）
+                hidden_size=self.net.hidden_size,           # 输入：JiT 中间层特征（B/16 为 768）
+                z_dim=dino_feature_dim,                     # 输出：teacher 特征维度（DINOv3-B 为 768）
+                proj_kwargs_kernel_size=int(args.dino_projector_kernel_size),
+            )
         self.dino_input_projector: Optional[nn.Module] = None
         if self.dino_input_projector_type == "pixeldit2":
             self.dino_input_projector = TimestepProjection(
@@ -199,13 +207,16 @@ class DINOJiTDenoiser(nn.Module):
 
         - student_tokens：带噪图像 → DINO+LoRA（可训练），供 JiT 输入融合；
           native 模式没有这条支路，返回 None；
-        - target_tokens：干净图像 → frozen iREPA teacher，作对齐目标。
+        - target_tokens：干净图像 → frozen iREPA teacher，作对齐目标；
+          noirepa 模式跳过 teacher 前向，返回 None。
         """
         student_tokens = (
             None
             if self.dino_jit_input_mode == "native"
             else self._encode_noisy_student(noisy_z, timesteps)
         )
+        if not self.irepa_alignment:
+            return student_tokens, None
         return student_tokens, self._encode_teacher_target(clean_x)
 
     def _encode_teacher_target(self, clean_x: torch.Tensor) -> torch.Tensor:
@@ -399,19 +410,32 @@ class DINOJiTDenoiser(nn.Module):
         jit_tokens, input_diagnostics = self._compose_jit_input_tokens(
             z, student_tokens, t, label_drop_mask=label_drop_mask,
         )
-        x_pred, projector_input_tokens = self._jit_forward_from_tokens(
-            jit_tokens, t.flatten(), labels_dropped, noisy_image=z,
-            alignment_depth=self.jit_alignment_depth,
-        )
-        align_tokens = self._project_student_tokens(projector_input_tokens)
+        if self.irepa_alignment:
+            x_pred, projector_input_tokens = self._jit_forward_from_tokens(
+                jit_tokens, t.flatten(), labels_dropped, noisy_image=z,
+                alignment_depth=self.jit_alignment_depth,
+            )
+            align_tokens = self._project_student_tokens(projector_input_tokens)
+        else:
+            # noirepa：不取中间层、不投影，模型只出图像。
+            x_pred = self._jit_forward_from_tokens(
+                jit_tokens, t.flatten(), labels_dropped, noisy_image=z,
+                alignment_depth=None,
+            )
+            projector_input_tokens = None
+            align_tokens = None
         # 模型显式预测 clean x，再用同一解析关系转换为 velocity 监督。
         v_pred = (x_pred - z) / (1.0 - t).clamp_min(self.t_eps)
 
-        # velocity MSE + 0.5 × iREPA 对齐损失。
+        # velocity MSE + 0.5 × iREPA 对齐损失（noirepa 时只有 velocity MSE）。
         denoise_per_sample = ((v - v_pred) ** 2).mean(dim=(1, 2, 3))
         denoise_loss = denoise_per_sample.mean()
-        alignment_loss, alignment_metrics = self._alignment_loss(align_tokens, target_tokens)
-        total_loss = denoise_loss + 0.5 * alignment_loss
+        if self.irepa_alignment:
+            alignment_loss, alignment_metrics = self._alignment_loss(align_tokens, target_tokens)
+            total_loss = denoise_loss + 0.5 * alignment_loss
+        else:
+            alignment_loss, alignment_metrics = None, None
+            total_loss = denoise_loss
 
         loss_dict = self._training_metrics(
             x=x, x_pred=x_pred, t=t, total_loss=total_loss,
@@ -510,27 +534,14 @@ class DINOJiTDenoiser(nn.Module):
         projector_input_tokens, align_tokens, target_tokens, alignment_metrics,
     ):
         """仅记录 loss、token 范数和对齐统计，不参与反向传播。"""
-        projector_output_tokens_f = align_tokens.detach().float()
         jit_tokens_f = jit_tokens.detach().float()
-        projector_output_norm = projector_output_tokens_f.norm(dim=-1).mean()
         jit_norm = jit_tokens_f.norm(dim=-1).mean()
-        projector_input_tokens_f = projector_input_tokens.detach().float()
-        projector_input_norm = projector_input_tokens_f.norm(dim=-1).mean()
-        projector_delta_norm = (
-            projector_output_tokens_f - projector_input_tokens_f
-        ).norm(dim=-1).mean()
         x_mse = ((x_pred - x) ** 2).mean(dim=(1, 2, 3)).mean()
 
         loss_dict: dict[str, float] = {
             "total_loss": total_loss.detach().item(),
             "denoise_loss": denoise_loss.detach().item(),
             "x_mse": x_mse.detach().item(),
-            "alignment_projector_delta_norm": projector_delta_norm.item(),
-            "alignment_projector_input_token_norm": projector_input_norm.item(),
-            "alignment_projected_token_norm": projector_output_norm.item(),
-            "alignment_projector_output_input_norm_ratio": (
-                projector_output_norm / projector_input_norm.clamp_min(1e-12)
-            ).item(),
             "jit_input_token_norm": jit_norm.item(),
             "t_mean": t.detach().float().mean().item(),
             "t_min": t.detach().float().min().item(),
@@ -559,6 +570,15 @@ class DINOJiTDenoiser(nn.Module):
                     ].detach().float().mean().item(),
                 }
             )
+        if not self.irepa_alignment:
+            return loss_dict
+        projector_output_tokens_f = align_tokens.detach().float()
+        projector_output_norm = projector_output_tokens_f.norm(dim=-1).mean()
+        projector_input_tokens_f = projector_input_tokens.detach().float()
+        projector_input_norm = projector_input_tokens_f.norm(dim=-1).mean()
+        projector_delta_norm = (
+            projector_output_tokens_f - projector_input_tokens_f
+        ).norm(dim=-1).mean()
         target_tokens_f = target_tokens.detach().float()
         pre_raw_cos = F.cosine_similarity(
             projector_input_tokens_f, target_tokens_f, dim=-1
@@ -566,6 +586,12 @@ class DINOJiTDenoiser(nn.Module):
         post_raw_cos = alignment_metrics["raw_cosine"].detach()
         loss_dict.update(
             {
+                "alignment_projector_delta_norm": projector_delta_norm.item(),
+                "alignment_projector_input_token_norm": projector_input_norm.item(),
+                "alignment_projected_token_norm": projector_output_norm.item(),
+                "alignment_projector_output_input_norm_ratio": (
+                    projector_output_norm / projector_input_norm.clamp_min(1e-12)
+                ).item(),
                 "alignment_loss": alignment_loss.detach().item(),
                 "alignment_pre_projector_raw_cosine": pre_raw_cos.item(),
                 "alignment_raw_cosine": post_raw_cos.item(),

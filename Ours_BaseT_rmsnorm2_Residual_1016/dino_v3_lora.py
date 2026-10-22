@@ -68,7 +68,7 @@ class DINOv3PatchTokenEncoder(nn.Module):
             self.model.norm = nn.LayerNorm(
                 norm.normalized_shape,
                 eps=norm.eps,
-                elementwise_affine=False,
+                elementwise_affine=False,   #这里移除了
                 device=norm.weight.device,
                 dtype=norm.weight.dtype,
             ).train(norm.training)

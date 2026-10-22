@@ -191,7 +191,7 @@ def _summarize_train_scalars(loss_value, reduced_loss_dict, lr, grad_stats, para
         "loss": _as_loggable_scalar(loss_value),
         "total_loss": _as_loggable_scalar(reduced_loss_dict.get("total_loss", loss_value)),
         "denoise_loss": _as_loggable_scalar(reduced_loss_dict["denoise_loss"]),
-        "alignment_loss": _as_loggable_scalar(reduced_loss_dict["alignment_loss"]),
+        "alignment_loss": _as_loggable_scalar(reduced_loss_dict.get("alignment_loss", 0.0)),
         "grad_norm": grad_stats["total"][0],
         "grad_norm/jit": grad_stats["jit"][0],
         "grad_norm/jit_pre_alignment": grad_stats["jit_pre_alignment"][0],

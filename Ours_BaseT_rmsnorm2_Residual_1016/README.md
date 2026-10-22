@@ -2,7 +2,7 @@
 
 本目录从 `Ours_BaseT_Residual_1008` 的本地版本衍生，研究**生成侧 DINO token 与 JiT 原生 patch token，分别经过 RMSNorm 后再按时间权重融合**。训练时另有冻结的 DINO teacher，为 JiT 中间层提供 iREPA 对齐目标。
 
-**GitHub 源码版**：只同步模型、配置、依赖、第三方源码和可独立运行的测试；启动脚本、checkpoint、权重、日志、采样结果和实验表格留在各自机器。
+**GitHub 源码版**：只同步模型、配置、依赖和第三方源码；启动脚本、测试、checkpoint、权重、日志、采样结果和实验表格留在各自机器。
 
 先读根目录的接线和模型文件，不必从整个 `jit/` 或 `SSL_code/` 开始。当前关注的 reverse / NoDDTHead 配置使用 `(1-t) × DINO + t × JiT`，输出走 JiT 自带的 final layer。
 
@@ -30,7 +30,7 @@
 | `SSL_code/dinov3/` | DINOv3 上游源码的本地副本；包装器通过 `torch.hub.load(..., source="local")` 加载。 |
 | `configs/` | 各实验 YAML，决定实际启用的模型路径和超参数。 |
 | `scripts/`（仅本地） | 各机器自己的启动与排队工具，不随源码发布。 |
-| `tests/` | 可独立运行的模型与配置测试；依赖本机脚本或 checkpoint 的测试留在开发机。 |
+| `tests/`（仅本地） | 回归测试留在开发机，不随源码发布。 |
 | `third_party/` | 上游许可证和来源声明，不是另一套模型实现。 |
 | `require.txt` | Python 依赖清单。 |
 | `checkpoints/` | 训练输出、评测结果、队列及源码快照，不是需要阅读的模型源码。 |
@@ -91,6 +91,7 @@ torchrun main_dino_jit.py + configs/实验.yaml
 
 | 参数 | 含义 |
 |---|---|
+| `irepa_alignment` | 默认开启；`--no-irepa_alignment` 为 noirepa 消融：不构建 frozen teacher 与对齐 ConvProj，训练只算 velocity loss。 |
 | `dino_preprocess_input` | 只控制 DINO+LoRA 输入：`false` 原样输入；`true` 调用原有 t 相关解析 norm。teacher 始终使用 ImageNet 标准化。 |
 | `dino_jit_input_mode` | 仅两种：`native` 只用 JiT patch 输入；`time_blend` 按时间融合 JiT 与 DINO token（默认）。两种模式都训练 JiT patch embedding。 |
 | `dino_time_blend_reverse` | `false`：`t*DINO + (1-t)*JiT`；`true`：`(1-t)*DINO + t*JiT`。不改变扩散、JiT 或 PgT 使用的原始 `t`。 |
@@ -163,8 +164,4 @@ torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 \
 
 ## 6. 回归检查
 
-```bash
-CUDA_VISIBLE_DEVICES='' PYTHONPATH=.:jit python -m pytest -q tests
-```
-
-源码版保留可独立执行的模型与配置测试。启动脚本、队列、资源预检，以及依赖这些工具或本机 checkpoint 的测试没有发布。PixelDiT2 对照测试需要相邻的官方源码目录，缺失时会跳过。`third_party/` 中的 LICENSE、NOTICE 和来源说明保留。
+回归测试留在开发机（`tests/`，不随源码发布）。`third_party/` 中的 LICENSE、NOTICE 和来源说明保留。
