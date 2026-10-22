@@ -1,0 +1,113 @@
+# Only transform blend weights: DINO=1-f(t), JiT=f(t), f(t)=sigmoid(20*(t-0.5)).
+# Same reverse baseline recipe: 8 GPUs x 128 = 1024, lr 2e-4.
+# Independent learned per-token RMSNorm on each path before t/(1-t) blending.
+
+experiment:
+  exp_name: BaseT-Residual(1-t,t)-NoDinoPre-PgT-blend_rmsnorm2-SigmoidBlendK20-A0p5-NoDDTHead-B-80
+  output_dir: checkpoints/BaseT-Residual(1-t,t)-NoDinoPre-PgT-blend_rmsnorm2-SigmoidBlendK20-A0p5-NoDDTHead-B-80
+  resume: ''
+
+data:
+  data_path: ${IMAGENET_ROOT}
+  img_size: 256
+  class_num: 1000
+  hflip_prob: 0.5
+  num_workers: 12
+  pin_mem: true
+
+model:
+  jit:
+    model: JiT-B/16
+    attn_dropout: 0.0
+    proj_dropout: 0.0
+    jit_add_pos_embed_to_dino_tokens: true
+  dino_student:
+    dino_model_name: dinov3_vitb16
+    dino_preprocess_input: false
+    dino_weights: ${PRETRAIN_MODELS_ROOT}/dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth
+    dino_generation_final_norm_affine: true
+    dino_aggregation: mls
+    dino_layers: default
+  representation_residual:
+    dino_jit_input_mode: time_blend
+    dino_time_blend_reverse: true
+    dino_time_blend_transform: sigmoid
+    dino_time_blend_key: 20.0
+    dino_time_blend_a: 0.5
+    dino_input_projector: pixeldit2
+    dino_jit_pre_blend_rmsnorm: true
+    dino_grounding_drop_on_label_drop: false
+  lora:
+    dino_lora_r: 64
+    dino_lora_alpha: 64.0
+    dino_lora_dropout: 0.0
+    dino_lora_target_modules: qkv,proj,fc1,fc2
+  trainable_dino_parameters:
+    dino_train_patch_embed: true
+
+alignment:
+  source:
+    jit_alignment_depth: 4
+  projector:
+    dino_projector_kernel_size: 3
+  loss:
+    dino_zscore_alpha: 0.8
+
+ddt_head:
+  use_ddt_head: false
+  ddt_head_dim: 2048
+  ddt_head_num_heads: 16
+  ddt_head_depth: 2
+  ddt_head_bottleneck_dim: 128
+
+diffusion:
+  P_mean: -0.8
+  P_std: 0.8
+  noise_scale: 1.0
+  t_eps: 0.05
+  label_drop_prob: 0.1
+
+optimization:
+  epochs: 80
+  warmup_epochs: 5
+  batch_size: 128
+  global_batch_size: 1024
+  accum_iter: 1
+  lr: null
+  # lr = blr * global_batch_size / 256 = 0.0002 after warmup.
+  blr: 0.00005
+  min_lr: 0.0
+  lr_schedule: constant
+  weight_decay: 0.0
+  ema_decay1: 0.9999
+  ema_decay2: 0.9996
+
+checkpointing:
+  start_epoch: 0
+  save_interval: 10
+  save_last_freq: 1
+
+evaluation:
+  online_eval: true
+  evaluate_gen: false
+  eval_freq: 20
+  sampling_method: heun
+  num_sampling_steps: 50
+  cfg: 1.0
+  interval_min: 0.0
+  interval_max: 1.0
+  num_images: 50000
+  gen_bsz: 64
+  keep_eval_images: false
+  resume_eval_images: false
+
+logging:
+  log_freq: 100
+  metrics_log_freq: 100
+  metrics_log_name: blend_rmsnorm2_reverse_sigmoid_k20_a0p5_no_ddt_head_diagnostics
+  write_structured_metrics: true
+
+runtime:
+  device: cuda
+  seed: 0
+  dist_url: env://

@@ -294,21 +294,15 @@ class DINOJiTDenoiser(nn.Module):
         target_tokens = target_tokens.float()
         target_loss_tokens = self._spatial_normalize_target(target_tokens)
 
-        raw_mse = (aligned_tokens - target_tokens).square().mean()
         raw_cos_per_token = F.cosine_similarity(aligned_tokens, target_tokens, dim=-1)
-        loss_cos_per_token = F.cosine_similarity(
-            aligned_tokens, target_loss_tokens, dim=-1
-        )
+        loss_cos_per_token = F.cosine_similarity(aligned_tokens, target_loss_tokens, dim=-1)
         raw_cos = raw_cos_per_token.mean()
         loss_cos = loss_cos_per_token.mean()
         loss = -loss_cos
 
         metrics = {
-            "raw_mse": raw_mse,
             "raw_cosine": raw_cos,
-            "raw_cosine_std": raw_cos_per_token.std(unbiased=False),
             "loss_cosine": loss_cos,
-            "loss_cosine_std": loss_cos_per_token.std(unbiased=False),
         }
         return loss, metrics
 
@@ -482,12 +476,7 @@ class DINOJiTDenoiser(nn.Module):
         return z + (t_next - t) * 0.5 * (v_pred_t + v_pred_t_next)
 
     @torch.no_grad()
-    def _flow_dpm_solver_sample(
-        self,
-        z: torch.Tensor,
-        timesteps: torch.Tensor,
-        labels: torch.Tensor,
-    ) -> torch.Tensor:
+    def _flow_dpm_solver_sample(self, z: torch.Tensor, timesteps: torch.Tensor, labels: torch.Tensor, ) -> torch.Tensor:
         """FlowDPM：第一步 Euler，后续 AB2；N 步使用 N 次模型前向。"""
         v_prev = None
         for i in range(self.steps):
@@ -565,83 +554,21 @@ class DINOJiTDenoiser(nn.Module):
                     "dino_projected_token_norm": projected_norm.item(),
                     "jit_weighted_token_norm": jit_weighted_norm.item(),
                     "dino_weighted_token_norm": dino_weighted_norm.item(),
-                    "jit_blended_token_norm": jit_norm.item(),
-                    "dino_projected_to_native_norm_ratio": (
-                        projected_norm / native_norm.clamp_min(1e-12)
-                    ).item(),
-                    "dino_weighted_to_jit_weighted_norm_ratio": (
-                        dino_weighted_norm / jit_weighted_norm.clamp_min(1e-12)
-                    ).item(),
                     "dino_grounding_drop_fraction": input_diagnostics[
                         "grounding_drop_mask"
                     ].detach().float().mean().item(),
                 }
             )
-        align_tokens_f = align_tokens.detach().float()
         target_tokens_f = target_tokens.detach().float()
-        target_objective_tokens_f = self._spatial_normalize_target(
-            target_tokens_f
-        )
-        align_norm = align_tokens_f.norm(dim=-1).mean()
-        target_norm = target_tokens_f.norm(dim=-1).mean()
-        target_objective_norm = target_objective_tokens_f.norm(dim=-1).mean()
-        pre_raw_mse = F.mse_loss(
-            projector_input_tokens_f, target_tokens_f
-        )
-        pre_raw_cos_per_token = F.cosine_similarity(
+        pre_raw_cos = F.cosine_similarity(
             projector_input_tokens_f, target_tokens_f, dim=-1
-        )
-        pre_objective_cos_per_token = F.cosine_similarity(
-            projector_input_tokens_f, target_objective_tokens_f, dim=-1
-        )
-        pre_raw_cos = pre_raw_cos_per_token.mean()
-        pre_objective_cos = pre_objective_cos_per_token.mean()
+        ).mean()
         post_raw_cos = alignment_metrics["raw_cosine"].detach()
-        post_objective_cos = alignment_metrics["loss_cosine"].detach()
-        post_raw_mse = alignment_metrics["raw_mse"].detach()
         loss_dict.update(
             {
-                "alignment_pre_projector_raw_mse": pre_raw_mse.item(),
-                "alignment_raw_mse": post_raw_mse.item(),
-                "alignment_projector_raw_mse_reduction": (
-                    pre_raw_mse - post_raw_mse
-                ).item(),
                 "alignment_loss": alignment_loss.detach().item(),
-                "alignment_loss_weighted": (
-                    0.5 * alignment_loss
-                ).detach().item(),
                 "alignment_pre_projector_raw_cosine": pre_raw_cos.item(),
                 "alignment_raw_cosine": post_raw_cos.item(),
-                "alignment_projector_raw_cosine_gain": (
-                    post_raw_cos - pre_raw_cos
-                ).item(),
-                "alignment_pre_projector_raw_cosine_std": (
-                    pre_raw_cos_per_token.std(unbiased=False).item()
-                ),
-                "alignment_raw_cosine_std": alignment_metrics[
-                    "raw_cosine_std"
-                ].detach().item(),
-                "alignment_pre_projector_objective_cosine": (
-                    pre_objective_cos.item()
-                ),
-                "alignment_objective_cosine": post_objective_cos.item(),
-                "alignment_projector_objective_cosine_gain": (
-                    post_objective_cos - pre_objective_cos
-                ).item(),
-                "alignment_pre_projector_objective_cosine_std": (
-                    pre_objective_cos_per_token.std(unbiased=False).item()
-                ),
-                "alignment_objective_cosine_std": alignment_metrics[
-                    "loss_cosine_std"
-                ].detach().item(),
-                "alignment_token_norm": align_norm.item(),
-                "alignment_target_token_norm": target_norm.item(),
-                "alignment_objective_target_token_norm": (
-                    target_objective_norm.item()
-                ),
-                "alignment_token_norm_ratio": (
-                    align_norm / target_norm.clamp_min(1e-12)
-                ).item(),
             }
         )
         return loss_dict

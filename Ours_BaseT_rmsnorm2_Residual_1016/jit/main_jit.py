@@ -140,7 +140,7 @@ def get_args_parser():
                         help='Folder that contains checkpoint to resume from')
     parser.add_argument('--save_last_freq', type=int, default=5,
                         help='Frequency (in epochs) to save checkpoints')
-    parser.add_argument('--log_freq', default=100, type=int)
+    parser.add_argument('--log_freq', default=200, type=int)
     parser.add_argument('--metrics_log_freq', default=None, type=int,
                         help='Frequency (in iterations) for JSONL/CSV metric rows. Defaults to log_freq.')
     parser.add_argument('--metrics_log_name', default='train_metrics', type=str,

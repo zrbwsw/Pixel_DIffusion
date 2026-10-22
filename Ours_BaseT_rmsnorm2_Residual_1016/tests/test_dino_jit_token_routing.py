@@ -460,7 +460,6 @@ def test_student_toggle_applies_to_training_and_sampling_but_not_teacher(enabled
     torch.testing.assert_close(router.teacher.last_input, imagenet_norm(router, clean))
     assert router.teacher.last_input.requires_grad is False
     assert loss.item() == pytest.approx(metrics["denoise_loss"] + 0.5 * metrics["alignment_loss"], abs=1e-5)
-    assert metrics["alignment_loss_weighted"] == pytest.approx(0.5 * metrics["alignment_loss"])
 
     noisy = torch.full_like(clean, 0.25)
     router._predict_clean_from_noisy(noisy, torch.full((2,), 0.5), torch.tensor([3, 7]))
@@ -542,11 +541,10 @@ def test_time_blend_reports_native_projected_weighted_and_fused_norms():
     for name in (
         "native_jit_patch_token_norm", "dino_projected_token_norm",
         "jit_weighted_token_norm", "dino_weighted_token_norm",
-        "jit_blended_token_norm", "dino_grounding_drop_fraction",
+        "jit_input_token_norm", "dino_grounding_drop_fraction",
     ):
         assert name in metrics
     assert metrics["dino_grounding_drop_fraction"] == 0.0
-    assert metrics["jit_blended_token_norm"] == metrics["jit_input_token_norm"]
 
 
 @pytest.mark.parametrize("reverse", [False, True])
@@ -621,12 +619,10 @@ def test_structured_metrics_use_current_objective_names():
     )
     norms = {group: (0.0, 0) for group in groups}
     summary = _summarize_train_scalars(
-        1.0, {"denoise_loss": 0.25, "alignment_loss": -0.4,
-              "alignment_loss_weighted": -0.2}, 1e-4, norms, norms,
+        1.0, {"denoise_loss": 0.25, "alignment_loss": -0.4}, 1e-4, norms, norms,
     )
     assert summary["denoise_loss"] == 0.25
     assert summary["alignment_loss"] == -0.4
-    assert summary["alignment_loss_weighted"] == -0.2
     assert "grad_norm/alignment_projector" in summary
 
 
