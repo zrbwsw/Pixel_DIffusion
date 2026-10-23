@@ -469,23 +469,23 @@ class DINOJiTDenoiser(nn.Module):
     @torch.no_grad()
     def _forward_sample(self, z: torch.Tensor, t: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """计算采样 velocity；CFG 区间内将条件/无条件样本拼成 2B 一次前向。"""
-        is_guidance_active = self.cfg_scale != 1.0
-        low, high = self.cfg_interval
-        if is_guidance_active and ((t[0] >= high) or (low != 0 and t[0] <= low)):
-            is_guidance_active = False
+        is_guidance_active = self.cfg_scale != 1.0  # cfg=1.0 时 CFG 无效果，直接走单路
+        low, high = self.cfg_interval  # CFG 生效的 t 区间 (low, high)，如 (0.05, 1.0)
+        if is_guidance_active and ((t[0] >= high) or (low != 0 and t[0] <= low)):  # t: [B,1,1,1]，采样时全 batch 共享同一标量 t；t[0] 即取这个值（形状 [1,1,1] 的标量张量）做区间判断
+            is_guidance_active = False  # 当前 t 在 CFG 区间外：退化为单路，省一半前向
 
         if not is_guidance_active:
-            x_cond, _ = self._predict_clean_from_noisy(z, t, labels)
-            return (x_cond - z) / (1.0 - t).clamp_min(self.t_eps)
+            x_cond, _ = self._predict_clean_from_noisy(z, t, labels)  # z: [B,3,256,256]，labels: [B] → x_cond: [B,3,256,256]
+            return (x_cond - z) / (1.0 - t).clamp_min(self.t_eps)  # (1-t) 按 [B,1,1,1] 对 C/H/W 广播；返回 velocity [B,3,256,256]
 
-        z_in = torch.cat([z, z])
-        t_in = torch.cat([t, t])
-        null_labels = torch.full_like(labels, self.num_classes)
-        y_in = torch.cat([labels, null_labels])
-        x_out, _ = self._predict_clean_from_noisy(z_in, t_in, y_in)
-        x_cond, x_uncond = x_out.chunk(2)
-        x_cfg = x_uncond + self.cfg_scale * (x_cond - x_uncond)
-        return (x_cfg - z) / (1.0 - t).clamp_min(self.t_eps)
+        z_in = torch.cat([z, z])  # [2B,3,256,256]：前 B 份走条件，后 B 份走无条件
+        t_in = torch.cat([t, t])  # [2B,1,1,1]
+        null_labels = torch.full_like(labels, self.num_classes)  # [B]，全部置为 null 类别 1000（训练时 label drop 用的同一个 id）
+        y_in = torch.cat([labels, null_labels])  # [2B]：[真实标签, null]
+        x_out, _ = self._predict_clean_from_noisy(z_in, t_in, y_in)  # → [2B,3,256,256]，条件/无条件一次前向算完
+        x_cond, x_uncond = x_out.chunk(2)  # 沿 batch 维切开，各 [B,3,256,256]
+        x_cfg = x_uncond + self.cfg_scale * (x_cond - x_uncond)  # CFG 外推 [B,3,256,256]：在无条件基础上沿条件方向放大 cfg_scale 倍
+        return (x_cfg - z) / (1.0 - t).clamp_min(self.t_eps)  # 同一解析关系转回 velocity [B,3,256,256]
 
     @torch.no_grad()
     def _euler_step(self, z: torch.Tensor, t: torch.Tensor, t_next: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
