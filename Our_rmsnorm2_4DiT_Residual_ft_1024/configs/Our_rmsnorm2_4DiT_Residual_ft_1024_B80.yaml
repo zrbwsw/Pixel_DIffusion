@@ -31,6 +31,9 @@ model:
     dino_jit_input_mode: post_block_time_blend
     dual_path_depth: 4
     dino_time_blend_reverse: true
+    dino_time_blend_transform: sigmoid
+    dino_time_blend_key: 10.0
+    dino_time_blend_a: 0.3
     dino_input_projector: pixeldit2
     dino_jit_pre_blend_rmsnorm: true
     dino_grounding_drop_on_label_drop: false

@@ -30,7 +30,7 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
         super().__init__(args)
         args.dino_jit_input_mode = requested_mode
 
-        self.dual_path_depth = int(getattr(args, "dual_path_depth", 4))
+        self.dual_path_depth = int(getattr(args, "dual_path_depth", 4))  # 双路径各跑前 4 层
         self.requested_dino_jit_input_mode = requested_mode
         if self.dual_path_mode:
             # JiT 原生 blocks[0:4] 是 JiT path；DINO path 使用同结构的独立副本。
@@ -50,11 +50,11 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
         blocks,
     ) -> torch.Tensor:
         """一条路径独立经过前四层，只处理空间 patch token。"""
-        x = tokens
+        x = tokens  # [B,256,768]（256 = 16×16 patch 网格）
         if self.jit_add_pos_embed:
-            x = x + self.net.pos_embed.to(device=x.device, dtype=x.dtype)
+            x = x + self.net.pos_embed.to(device=x.device, dtype=x.dtype)  # 两路都加 JiT 位置编码
         for block in blocks:
-            x = block(x, condition, self.net.feat_rope)
+            x = block(x, condition, self.net.feat_rope)  # 前缀段无 in-context token，用 feat_rope
         return x
 
     def _post_block_tokens(
@@ -66,29 +66,30 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
         label_drop_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         """两路各跑四层，DINO 路输出单独保留用于 iREPA 对齐。"""
-        native_tokens = self.net.x_embedder(noisy_image)
-        projected_tokens = dino_tokens
+        native_tokens = self.net.x_embedder(noisy_image)  # [B,3,256,256] → [B,256,768]
+        projected_tokens = dino_tokens  # student 输出 [B,256,768]
         if self.dino_input_projector is not None:
             grid_hw = tuple(
                 size // self.net.patch_size for size in noisy_image.shape[-2:]
-            )
+            )  # token 网格 (16,16)
             projected_tokens = self.dino_input_projector(
                 dino_tokens.to(dtype=self.dino_input_projector.input_proj.weight.dtype),
-                timesteps.flatten(),
+                timesteps.flatten(),  # PgT 注入原始 t
                 grid_hw,
-            )
+            )  # → [B,256,768]，与 JiT token 同形
 
-        native_tokens = self.jit_pre_blend_norm(native_tokens)
-        projected_tokens = self.dino_pre_blend_norm(projected_tokens)
-
-        t_flat = timesteps.flatten()
-        condition = self.net.t_embedder(t_flat) + self.net.y_embedder(labels)
-        jit_prefix = self._run_prefix_blocks(
+        t_flat = timesteps.flatten()  # [B]，原始扩散时间
+        condition = self.net.t_embedder(t_flat) + self.net.y_embedder(labels)  # [B,768]，两路共用
+        jit_block_tokens = self._run_prefix_blocks(
             native_tokens, condition, self.net.blocks[: self.dual_path_depth]
-        )
-        dino_prefix = self._run_prefix_blocks(
+        )  # JiT 路第4层输出 [B,256,768]
+        dino_block_tokens = self._run_prefix_blocks(
             projected_tokens, condition, self.dino_prefix_blocks
-        )
+        )  # DINO 路第4层原始输出 [B,256,768]；对齐用这个（不过 RMSNorm）
+
+        # 第4层输出是实际融合输入；两路先各自 RMSNorm，再计算融合权重。
+        jit_prefix = self.jit_pre_blend_norm(jit_block_tokens)
+        dino_prefix = self.dino_pre_blend_norm(dino_block_tokens)
 
         # 加权被放到 iREPA 对齐之后；扩散和 PgT 仍使用原始 t。
         blend_t = t_flat
@@ -99,9 +100,9 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
                 a=self.dino_time_blend_a,
             )
         blend_t = blend_t.to(device=jit_prefix.device, dtype=jit_prefix.dtype)
-        blend_t = blend_t.view(-1, 1, 1)
+        blend_t = blend_t.view(-1, 1, 1)  # [B] → [B,1,1]，对每个 token 广播
         if self.dino_time_blend_reverse:
-            jit_weight, dino_weight = blend_t, 1.0 - blend_t
+            jit_weight, dino_weight = blend_t, 1.0 - blend_t  # reverse：t 越大 JiT 权重越大
         else:
             jit_weight, dino_weight = 1.0 - blend_t, blend_t
 
@@ -118,7 +119,7 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
             jit_weighted = torch.where(mask, jit_prefix, jit_weighted)
             dino_weighted = dino_weighted.masked_fill(mask, 0)
 
-        fused_tokens = jit_weighted + dino_weighted
+        fused_tokens = jit_weighted + dino_weighted  # [B,256,768]
         diagnostics = {
             "native_tokens": jit_prefix,
             "dino_projected_tokens": dino_prefix,
@@ -126,7 +127,8 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
             "dino_weighted_tokens": dino_weighted,
             "grounding_drop_mask": grounding_drop_mask,
         }
-        return fused_tokens, dino_prefix, diagnostics
+        # 对齐使用 DINO 第4层原始输出（未过 RMSNorm），RMSNorm 只作用于融合分支。
+        return fused_tokens, dino_block_tokens, diagnostics
 
     def _run_shared_tail(
         self,
@@ -137,25 +139,26 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
     ) -> torch.Tensor:
         """融合后插入 class token，执行剩余 JiT blocks 和输出头。"""
         net = self.net
-        t_emb = net.t_embedder(timesteps.flatten())
-        y_emb = net.y_embedder(labels)
+        t_emb = net.t_embedder(timesteps.flatten())  # [B,768]
+        y_emb = net.y_embedder(labels)  # [B,768]
         condition = t_emb + y_emb
-        x = fused_tokens
+        x = fused_tokens  # [B,256,768]
         class_tokens_inserted = False
 
         for i in range(self.dual_path_depth, len(net.blocks)):
             if net.in_context_len > 0 and i == net.in_context_start:
+                # 第4层插入32个类别 in-context token：[B,256,768] → [B,288,768]。
                 in_context_tokens = y_emb.unsqueeze(1).repeat(1, net.in_context_len, 1)
                 in_context_tokens = in_context_tokens + net.in_context_posemb.to(
                     device=x.device, dtype=x.dtype
                 )
                 x = torch.cat([in_context_tokens, x], dim=1)
                 class_tokens_inserted = True
-            rope = net.feat_rope if i < net.in_context_start else net.feat_rope_incontext
+            rope = net.feat_rope if i < net.in_context_start else net.feat_rope_incontext  # 288 长度用后者
             x = net.blocks[i](x, condition, rope)
 
         if class_tokens_inserted:
-            x = x[:, net.in_context_len :]
+            x = x[:, net.in_context_len :]  # 剥掉 in-context token → [B,256,768]
         if self.use_ddt_head:
             patches = self.ddt_head(noisy_image, x, t_emb=t_emb)
         else:
@@ -214,6 +217,7 @@ class FourDiTResidualDenoiser(DINOJiTDenoiser):
             fused_tokens, t, labels_dropped, noisy_image=z
         )
         aligned_tokens = self._project_student_tokens(dino_prefix) if self.irepa_alignment else None
+        # 注意：此处的 dino_prefix 是 _post_block_tokens 返回的 DINO 路第4层原始输出（未过 RMSNorm）。
 
         velocity_pred = (x_pred - z) / (1.0 - t).clamp_min(self.t_eps)
         denoise_loss = ((velocity - velocity_pred) ** 2).mean(dim=(1, 2, 3)).mean()

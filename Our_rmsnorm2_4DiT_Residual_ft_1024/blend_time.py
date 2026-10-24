@@ -23,5 +23,5 @@ def validate_blend_time(transform: str, key: float, input_mode: str, a: float = 
         raise ValueError("dino_time_blend_key must be finite")
     if not math.isfinite(a):
         raise ValueError("dino_time_blend_a must be finite")
-    if transform != "linear" and input_mode != "time_blend":
-        raise ValueError("dino_time_blend_transform=sigmoid requires time_blend")
+    if transform != "linear" and input_mode not in {"time_blend", "post_block_time_blend"}:
+        raise ValueError("dino_time_blend_transform=sigmoid requires an active fusion mode")

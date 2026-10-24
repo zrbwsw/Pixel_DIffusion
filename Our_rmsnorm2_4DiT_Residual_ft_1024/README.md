@@ -6,10 +6,10 @@
 
 ```text
 带噪 z_t
-  ├─ JiT patch embed → JiT RMSNorm → JiT blocks[0:4] ──────────────────┐
-  └─ DINOv3+LoRA → 各选中层分别过 final LN → MLS 聚合 → PgT(t) → DINO RMSNorm
-                          → 独立 blocks[0:4]
-                          └─ DINO 路第4层输出 → ConvProj → 与 frozen iREPA teacher 算对齐 loss
+  ├─ JiT patch embed → JiT blocks[0:4] → JiT RMSNorm ──────────────────┐
+  └─ DINOv3+LoRA → 各选中层分别过 final LN → MLS 聚合 → PgT(t)
+                          → 独立 blocks[0:4] → DINO RMSNorm
+                          └─ DINO 路第4层原始输出（未过 RMSNorm）→ ConvProj → 与 frozen iREPA teacher 算对齐 loss
                                                               ↓
                          按 f(t) 加权相加（两路各自过完前四层才融合）
                                   → 插入 class tokens → JiT blocks[4:]
@@ -17,9 +17,9 @@
 干净图像 x → ImageNet 标准化 → 冻结 DINO teacher → 最后层 normalized token → 对齐目标
 ```
 
-两条前缀路径使用完全相同的 JiTBlock 结构和初始权重，但参数不共享：JiT 路使用 `net.blocks[0:4]`，DINO 路使用 `dino_prefix_blocks` 的深拷贝。两路都先加 JiT 位置编码、共用 `c=t_embedder(t)+y_embedder(y)` 条件。第 4 层之后才按原来的 reverse 权重融合；`f(t)` 可以是线性 `t`，也可以是 `sigmoid(key*(t-a))`。MLS 的顺序与 1016 相同：每个选中层先分别过 final LN，再做均值+末层空间均值聚合，聚合后不再过 LN。
+两条前缀路径使用完全相同的 JiTBlock 结构和初始权重，但参数不共享：JiT 路使用 `net.blocks[0:4]`，DINO 路使用 `dino_prefix_blocks` 的深拷贝。两路都先加 JiT 位置编码、共用 `c=t_embedder(t)+y_embedder(y)` 条件；第 4 层输出分别经过各自 RMSNorm 后，才按 reverse 权重融合。当前配置使用 `f(t)=sigmoid(10*(t-0.3))`。MLS 的顺序与 1016 相同：每个选中层先分别过 final LN，再做均值+末层空间均值聚合，聚合后不再过 LN。
 
-冻结 teacher 只看干净图像，保持 ImageNet normalization、最后层 normalized patch tokens 和 `no_grad` 行为不变。DINO 路的第四层输出单独进入 ConvProj，alignment loss 不使用融合后的 token。
+冻结 teacher 只看干净图像，保持 ImageNet normalization、最后层 normalized patch tokens 和 `no_grad` 行为不变。DINO 路第四层在 RMSNorm 之前的原始输出单独进入 ConvProj，alignment loss 既不使用融合后的 token，也不使用融合分支的 RMSNorm 后版本。
 
 新配置和训练入口：
 
@@ -57,7 +57,7 @@
 | 5 | [dino_v3_lora.py](dino_v3_lora.py) | 生成侧 student 包装：选层、MLS 聚合、final LN、冻结/解冻；teacher 不依赖此文件。 |
 | 6 | [dino_lora.py](dino_lora.py) | 我们的 LoRA 工具：冻结原 Linear，向 qkv/proj/fc1/fc2 注入可训练低秩增量。 |
 | 7 | [pixeldit2_projector.py](pixeldit2_projector.py) | 改编自 PixelDiT2 的生成侧 PgT：处理 DINO token，并注入时间条件。 |
-| 融合权重 | [blend_time.py](blend_time.py) | 仅变换融合系数中的 t；可选 `sigmoid(key*(t-a))`，默认 key=100、a=0.1。 |
+| 融合权重 | [blend_time.py](blend_time.py) | 仅变换融合系数中的 t；本配置使用 `sigmoid(10*(t-0.3))`。 |
 | 可后看 | [jit_ddt_head.py](jit_ddt_head.py) | 参考 RAEv2/JiT 的可选 DDT 输出头；当前 NoDDTHead 配置不启用。 |
 
 “我们”包括从 1016 继承的项目扩展，不表示全部代码都是本实验新写。上游改编文件保留了来源及许可。
@@ -106,20 +106,21 @@ scripts/启动脚本 + configs/实验.yaml
 
 ```text
 带噪图像 z_t
-  ├─ JiT patch embed → JiT RMSNorm → ×t ─────────────────────┐
-  └─ DINOv3+LoRA → final LN → MLS → PgT(t) → DINO RMSNorm → ×(1-t)
-                                                           ↓ 相加
-                                               加位置编码 → JiT blocks
-                                                 ├─ 第4层 → ConvProj → 对齐 loss
-                                                 └─ final layer → 干净图像预测 → 去噪 loss
-干净图像 x → ImageNet 标准化 → 冻结 DINO teacher → 最后层 token → 对齐目标
+  ├─ JiT patch embed → JiT blocks[0:4] → JiT RMSNorm → ×t ──────────────┐
+  └─ DINOv3+LoRA → 各选中层分别过 final LN → MLS → PgT(t)
+                        → 独立 blocks[0:4] ──→ DINO RMSNorm → ×(1-t) ───┤
+                        └─ 第4层原始输出（未过 RMSNorm）→ ConvProj → 对齐 loss
+                                                              ↓ 相加
+                                                   加 class tokens → JiT blocks[4:]
+                                                     └─ final layer → 干净图像预测 → 去噪 loss
+干净图像 x → ImageNet 标准化 → 冻结 DINO teacher → 最后层 normalized token → 对齐目标
 ```
 
 - **student 和 teacher 是独立实例。** student 看带噪图像，使用 LoRA/MLS；teacher 看干净图像、冻结、无 LoRA/MLS，不进入优化器或 EMA。采样不需要 teacher 的对齐计算。
 - **teacher 的输入和输出保持原样。** `_encode_teacher_target()` 内写死 ImageNet 标准化（FP32 下 `[-1,1]` → `[0,1]` → 减均值除方差），跟随 iREPA 源码的固定预处理；独立 teacher 不重复归一化、不量化或 resize。它按本地 [iREPA 的 DINOv3Encoder](../iREPA/jit/vision_encoder.py) 调用 `forward_features(x)["x_norm_patchtokens"]`，保留预训练 final LN 的 gamma/beta。内部使用 `no_grad`，即使外部调用 `.train()` 也保持 eval。teacher 继续放在普通 list 中，旧 checkpoint 不需要转换。
 - **student 输入有三种。** `dino_preprocess`：`none`=NoDinoPre（带噪图像直接进 DINO+LoRA）；`t_moment`=t 相关解析 norm（按 `z_t=t·x+(1-t)·ε` 的解析均值/方差标准化）；`imagenet`=与 teacher 相同的固定 ImageNet 标准化（PixelDiT2 grounding 方式，不使用 t）。旧布尔键 `dino_preprocess_input`（true=t_moment、false=none）仍兼容。
 - teacher 沿用 iREPA 的 `forward_features()` 接口，不再实现额外的 `forward()`；生成侧仍通过 `dino_student(input)` 前向并反传。
-- **两个 projector 不要混淆。** `pixeldit2_projector.py` 的 PgT 处理生成分支 DINO token；`jit/projectors.py` 的 ConvProj 处理 JiT 第4层特征，只用于训练对齐。
+- **两个 projector 不要混淆。** `pixeldit2_projector.py` 的 PgT 处理生成分支 DINO token；`jit/projectors.py` 的 ConvProj 处理 DINO 路第4层（独立 blocks）的输出特征，只用于训练对齐。
 - wrapper 的 `_spatial_normalize_target()` / `_alignment_loss()` 实现空间 z-score 与负 cosine，`total_loss = denoise_loss + 0.5 * alignment_loss`。
 - B/16、256×256 输入对应空间 token `[B, 256, 768]`，这里 `B` 是每卡 batch。
 
@@ -135,10 +136,10 @@ scripts/启动脚本 + configs/实验.yaml
 | `dino_student_label_cond` | 默认 `false`；`true` 时同位置加 JiT 同款 `y_embedder(y)`，跟随 label drop（null 类=1000），训练与 CFG 采样一致。 |
 | `dino_jit_input_mode` | `native` 只用 JiT patch 输入；`time_blend` 在 blocks 前融合；`post_block_time_blend` 让两路各过前4个独立 blocks 后再融合。三种模式都训练 JiT patch embedding。 |
 | `dino_time_blend_reverse` | `false`：`t*DINO + (1-t)*JiT`；`true`：`(1-t)*DINO + t*JiT`。不改变扩散、JiT 或 PgT 使用的原始 `t`。 |
-| `dino_time_blend_transform` | 默认 `linear` 保持历史行为；`sigmoid` 仅把融合系数中的 `t` 替换为 `f(t)=sigmoid(key*(t-a))`。 |
-| `dino_time_blend_key` | sigmoid 的固定斜率，默认100，不是可学习权重。 |
-| `dino_time_blend_a` | sigmoid 的固定中心点，默认0.1；t=a 时两路各占0.5。旧配置未填写时仍用0.1。 |
-| `dino_jit_pre_blend_rmsnorm` | 同时控制融合前的两路 RMSNorm；本版本两路各有自己的可学习 gamma。 |
+| `dino_time_blend_transform` | 本配置为 `sigmoid`，把融合系数中的 `t` 替换为 `f(t)=sigmoid(key*(t-a))`。 |
+| `dino_time_blend_key` | sigmoid 的固定斜率；本配置为10，不是可学习权重。 |
+| `dino_time_blend_a` | sigmoid 的固定中心点；本配置为0.3，`t=a` 时两路各占0.5。 |
+| `dino_jit_pre_blend_rmsnorm` | 控制第4层输出、加权融合前的两路 RMSNorm；两路各有自己的可学习 gamma。 |
 | `dino_aggregation`、`dino_layers` | 生成 DINO 的取层与聚合；B/16 的 `mls/default` 使用 `[2,5,8,11]`。 |
 | `dino_train_patch_embed` | 是否训练生成 DINO 的 patch embedding。 |
 | `dino_generation_final_norm_affine` | 是否保留生成 DINO final LN 的 gamma/beta；`false` 是 NoAffine 消融。 |
@@ -146,13 +147,13 @@ scripts/启动脚本 + configs/实验.yaml
 | `dino_grounding_drop_on_label_drop` | DropRes：类别被丢弃时，融合权重改为 DINO=0、JiT=1。 |
 | `use_ddt_head` | NoDDTHead 为 `false`，使用 JiT 原生输出层；历史 DDT 配置仍依赖 `jit_ddt_head.py`。 |
 
-**DINO final LN、融合 RMSNorm、block 内部 norm 是不同位置。** final LN 解冻保留预训练 gamma/beta 初值，B/16 增加 `768+768=1,536` 个可训练参数。MLS 的多个选中层输出共用此 final LN，再聚合；teacher 和 block 内部 norm 不随开关解冻。
+**DINO final LN、融合 RMSNorm、block 内部 norm 是不同位置。** final LN 解冻保留预训练 gamma/beta 初值，B/16 增加 `768+768=1,536` 个可训练参数。MLS 的多个选中层输出先各自过此 final LN，再做均值+末层空间均值聚合，聚合后不再过 LN；teacher 和 block 内部 norm 不随开关解冻。
 
-两路 RMSNorm 参数为 `jit_pre_blend_norm.weight`、`dino_pre_blend_norm.weight`，互不共享；学习到的 gamma 可以使归一化后的两路范数不同。
+两路 RMSNorm 参数为 `jit_pre_blend_norm.weight`、`dino_pre_blend_norm.weight`，互不共享；它们作用于两路第4层输出、实际融合点之前。学习到的 gamma 可以使归一化后的两路范数不同。
 
 解析 norm 继续使用 `_preprocess_noisy_student_for_dino()`：令 `μ=2·ImageNet_mean−1`、`σ=2·ImageNet_std`，返回 `(z_t−t·μ) / sqrt(t²·σ²+(1−t)²·noise_scale²)`。训练和采样共用这条路径；这里使用原始扩散时间 t，不使用 sigmoid 融合权重 f(t)。当前 reverse / sigmoid 配方仍为 `dino_preprocess_input: false`。
 
-sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法配置 [Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml](configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml)。融合权重语义与 1016 一致：对应公式为 `(1-f(t))*DINO + f(t)*JiT`（reverse 开启时）；PgT、JiT 时间条件、加噪、velocity/loss、采样时间步及 CFG interval 均仍使用原始 `t`，`f(t)` 可以是线性 `t` 或 `sigmoid(key*(t-a))`。1016 的历史配方与启动脚本见 `../Ours_BaseT_rmsnorm2_Residual_1016/`。
+sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法配置 [Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml](configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml)。融合权重语义与 1016 一致：对应公式为 `(1-f(t))*DINO + f(t)*JiT`（reverse 开启时），本配置的 `f(t)` 为 `sigmoid(10*(t-0.3))`；PgT、JiT 时间条件、加噪、velocity/loss、采样时间步及 CFG interval 均仍使用原始 `t`。1016 的历史配方与启动脚本见 `../Ours_BaseT_rmsnorm2_Residual_1016/`。
 
 ## 5. 脚本、资源和输出去哪找
 
