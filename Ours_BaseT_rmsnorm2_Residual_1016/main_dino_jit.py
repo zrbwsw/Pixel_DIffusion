@@ -86,11 +86,17 @@ def add_dino_jit_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument('--dino_generation_final_norm_affine', action=argparse.BooleanOptionalAction, default=True,
                         help='保留生成侧 final LN 的 gamma/beta；关闭即 NoAffine。')
 
-    # student（DINO+LoRA）输入二选一：false=NoDinoPre 不预处理；
-    # true=按加噪路径的解析均值/方差做 t 相关 norm。
-    # ImageNet 固定标准化写死在 iREPA teacher 一侧，不属于这里的选项。
-    parser.add_argument('--dino_preprocess_input', action=argparse.BooleanOptionalAction, default=True,
-                        help='true：对带噪图像做 t 相关解析标准化；false：不做预处理（NoDinoPre）。')
+    # student（DINO+LoRA）输入预处理三选一：none=不处理（NoDinoPre）；
+    # t_moment=t 相关解析 norm；imagenet=与 teacher 相同的固定 ImageNet 标准化（PixelDiT2 grounding 方式）。
+    # teacher 一侧的 ImageNet 固定标准化写死，不属于这里的选项。
+    parser.add_argument('--dino_preprocess', choices=('none', 't_moment', 'imagenet'), default=None, type=str,
+                        help='student 输入预处理三选一；未设置时跟随 dino_preprocess_input，都没有则默认 t_moment。')
+    parser.add_argument('--dino_preprocess_input', action=argparse.BooleanOptionalAction, default=None,
+                        help='[兼容旧配置] true=t_moment、false=none；新配置请改用 --dino_preprocess。')
+    parser.add_argument('--dino_student_time_cond', action=argparse.BooleanOptionalAction, default=False,
+                        help='patch_embed 后给每个 patch token 加 JiT 同款 t_embedder(t)，让 LoRA 感知时间。')
+    parser.add_argument('--dino_student_label_cond', action=argparse.BooleanOptionalAction, default=False,
+                        help='patch_embed 后给每个 patch token 加 JiT 同款 y_embedder(y)，跟随 label drop/null 类。')
 
     # iREPA 对齐总开关：--no-irepa_alignment 不构建 teacher、不算对齐 loss。
     parser.add_argument('--irepa_alignment', action=argparse.BooleanOptionalAction, default=True,

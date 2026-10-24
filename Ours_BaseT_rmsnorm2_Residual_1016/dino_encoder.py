@@ -68,4 +68,7 @@ def build_dino_student(args) -> nn.Module:
         train_cls_token=False,
         train_norm=args.dino_train_final_norm,
         final_norm_affine=args.dino_generation_final_norm_affine,
+        time_cond=args.dino_student_time_cond,
+        label_cond=args.dino_student_label_cond,
+        num_classes=args.class_num,
     )

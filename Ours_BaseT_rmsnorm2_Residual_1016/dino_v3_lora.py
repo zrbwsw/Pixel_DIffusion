@@ -40,7 +40,12 @@ def parse_layer_spec(spec: Optional[str], total_blocks: int) -> Optional[List[in
 
 
 class DINOv3PatchTokenEncoder(nn.Module):
-    """先冻结 backbone，再启用 LoRA 及指定参数；forward 返回 normalized patch tokens。"""
+    """先冻结 backbone，再启用 LoRA 及指定参数；forward 返回 normalized patch tokens。
+
+    可选条件注入（time_cond/label_cond）：patch_embed 之后、进 block 之前，
+    给每个 patch token 加上 JiT 同款的 t_embedder(t) / y_embedder(y)，
+    让 LoRA 能感知扩散时间和类别。
+    """
 
     def __init__(
         self,
@@ -57,6 +62,9 @@ class DINOv3PatchTokenEncoder(nn.Module):
         aggregation: str = "none",
         layer_indices: Optional[Sequence[int]] = None,
         final_norm_affine: bool = True,
+        time_cond: bool = False,
+        label_cond: bool = False,
+        num_classes: int = 1000,
     ):
         super().__init__()
         self.model = load_dino_v3(model_name=model_name, weights_path=weights_path)
@@ -94,41 +102,81 @@ class DINOv3PatchTokenEncoder(nn.Module):
             self.model.cls_token.requires_grad_(train_cls_token)
             self.model.norm.requires_grad_(train_norm)
 
+        # 可选的 t/y 条件注入：与 JiT 相同的 Timestep/LabelEmbedder，维度对齐 backbone。
+        # 延迟导入，仅启用时才要求 jit/ 在 PYTHONPATH 上。
+        self.time_cond = time_cond
+        self.label_cond = label_cond
+        if time_cond or label_cond:
+            from model_jit import LabelEmbedder, TimestepEmbedder
+            if time_cond:
+                self.cond_t_embedder = TimestepEmbedder(self.embed_dim)
+            if label_cond:
+                self.cond_y_embedder = LabelEmbedder(num_classes, self.embed_dim)
+            self._wrap_patch_embed_cond()
+        self._current_cond: Optional[torch.Tensor] = None
+
+    def _compute_cond(self, t: Optional[torch.Tensor], y: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        """t: [B]、y: [B]（null 类为 num_classes）→ [B,1,1,D] 加性条件；都关则 None。"""
+        cond = None
+        if self.time_cond:
+            cond = self.cond_t_embedder(t.reshape(-1).float()).reshape(-1, 1, 1, self.embed_dim)
+        if self.label_cond:
+            y_emb = self.cond_y_embedder(y).reshape(-1, 1, 1, self.embed_dim)
+            cond = y_emb if cond is None else cond + y_emb
+        return cond
+
+    def _wrap_patch_embed_cond(self) -> None:
+        """包装 patch_embed.forward：输出 [B,H,W,D] 上广播加条件；模块结构/state_dict 不变。"""
+        orig_forward = self.model.patch_embed.forward
+
+        def patched_forward(x, *args, **kwargs):
+            tokens = orig_forward(x, *args, **kwargs)
+            if self._current_cond is not None:
+                tokens = tokens + self._current_cond.to(dtype=tokens.dtype)
+            return tokens
+
+        self.model.patch_embed.forward = patched_forward
+
     @property
     def patch_size(self) -> int:
         return self.model.patch_size
 
-    def forward_patch_tokens(self, x: torch.Tensor, return_last_raw: bool = False):
+    def forward_patch_tokens(self, x: torch.Tensor, t: Optional[torch.Tensor] = None, y: Optional[torch.Tensor] = None, return_last_raw: bool = False):
         """none 取单层，mean 取层均值，MLS 再加最后一个选中层的空间均值。
         last_raw 指 backbone 最后一层经过 LN、尚未聚合的 patch tokens。
+        t/y 为可选条件输入，仅在 time_cond/label_cond 启用时使用。
         """
-        if self.aggregation == "none" and self._layer_indices is None:
-            patch_tokens = self.model.get_intermediate_layers(
-                x, n=1, reshape=False, return_class_token=False, norm=True,
-            )[0]
-            return (patch_tokens, patch_tokens) if return_last_raw else patch_tokens
+        self._current_cond = self._compute_cond(t, y)
+        try:
+            if self.aggregation == "none" and self._layer_indices is None:
+                patch_tokens = self.model.get_intermediate_layers(
+                    x, n=1, reshape=False, return_class_token=False, norm=True,
+                )[0]
+                return (patch_tokens, patch_tokens) if return_last_raw else patch_tokens
 
-        # 每个选中层共用输出 LN；outputs 中每项都是 [B,N,D]。
-        n_arg = self._layer_indices if self._layer_indices is not None else 1
-        outputs = self.model.get_intermediate_layers(
-            x, n=n_arg, reshape=False, return_class_token=False, norm=True,
-        )
-        if self._layer_indices and self._layer_indices[-1] == self._total_blocks - 1:
-            last_raw = outputs[-1]
-        else:
-            # 保持原有额外前向及调用顺序，避免改变训练态的随机数消耗。
-            last_raw = self.model.get_intermediate_layers(
-                x, n=1, reshape=False, return_class_token=False, norm=True,
-            )[0]
+            # 每个选中层共用输出 LN；outputs 中每项都是 [B,N,D]。
+            n_arg = self._layer_indices if self._layer_indices is not None else 1
+            outputs = self.model.get_intermediate_layers(
+                x, n=n_arg, reshape=False, return_class_token=False, norm=True,
+            )
+            if self._layer_indices and self._layer_indices[-1] == self._total_blocks - 1:
+                last_raw = outputs[-1]
+            else:
+                # 保持原有额外前向及调用顺序，避免改变训练态的随机数消耗。
+                last_raw = self.model.get_intermediate_layers(
+                    x, n=1, reshape=False, return_class_token=False, norm=True,
+                )[0]
 
-        patch_tokens = torch.stack(outputs, dim=0).mean(dim=0)
-        if self.aggregation == "mls":
-            # MLS = 选中层均值 + 最后一个选中层的空间均值广播。
-            patch_tokens = patch_tokens + outputs[-1].mean(dim=1, keepdim=True)
-        return (patch_tokens, last_raw) if return_last_raw else patch_tokens
+            patch_tokens = torch.stack(outputs, dim=0).mean(dim=0)
+            if self.aggregation == "mls":
+                # MLS = 选中层均值 + 最后一个选中层的空间均值广播。
+                patch_tokens = patch_tokens + outputs[-1].mean(dim=1, keepdim=True)
+            return (patch_tokens, last_raw) if return_last_raw else patch_tokens
+        finally:
+            self._current_cond = None
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.forward_patch_tokens(x)
+    def forward(self, x: torch.Tensor, t: Optional[torch.Tensor] = None, y: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.forward_patch_tokens(x, t=t, y=y)
 
-    def forward_with_last_raw(self, x: torch.Tensor):
-        return self.forward_patch_tokens(x, return_last_raw=True)
+    def forward_with_last_raw(self, x: torch.Tensor, t: Optional[torch.Tensor] = None, y: Optional[torch.Tensor] = None):
+        return self.forward_patch_tokens(x, t=t, y=y, return_last_raw=True)

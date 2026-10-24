@@ -39,7 +39,11 @@ class DINOJiTDenoiser(nn.Module):
         self.dino_time_blend_key = args.dino_time_blend_key
         self.dino_time_blend_a = args.dino_time_blend_a
         self.dino_jit_pre_blend_rmsnorm = args.dino_jit_pre_blend_rmsnorm
-        self.dino_preprocess_input = args.dino_preprocess_input
+        # student 输入预处理三选一；旧布尔开关优先（兼容历史 yaml），否则默认 t_moment。
+        if args.dino_preprocess_input is not None:
+            self.dino_preprocess = 't_moment' if args.dino_preprocess_input else 'none'
+        else:
+            self.dino_preprocess = args.dino_preprocess or 't_moment'
 
         self.net = JiT_models[args.model](
             input_size=args.img_size,
@@ -193,27 +197,34 @@ class DINOJiTDenoiser(nn.Module):
         ).sqrt().clamp_min(1e-6)
         return (z_float - mean_t) / std_t
 
-    def _encode_noisy_student(self, noisy_z: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
-        """带噪图像 → DINO+LoRA/MLS token；dino_preprocess_input 控制是否做 t 相关解析 norm。"""
-        student_input = (
-            self._preprocess_noisy_student_for_dino(noisy_z, timesteps)
-            if self.dino_preprocess_input
-            else noisy_z
-        )
-        return self.dino_student(student_input)
+    def _encode_noisy_student(self, noisy_z: torch.Tensor, timesteps: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """带噪图像 → DINO+LoRA/MLS token；dino_preprocess 控制三种预处理之一。
+        labels 为训练时已 drop 的标签（null 类=1000），供可选的 y 条件注入使用。
+        """
+        if self.dino_preprocess == 'imagenet':
+            # 与 teacher 相同的固定 ImageNet 标准化（PixelDiT2 grounding 方式），与 t 无关。
+            x01 = (noisy_z.float() + 1.0) * 0.5
+            mean = self.dino_mean.to(device=noisy_z.device, dtype=x01.dtype)
+            std = self.dino_std.to(device=noisy_z.device, dtype=x01.dtype)
+            student_input = (x01 - mean) / std
+        elif self.dino_preprocess == 't_moment':
+            student_input = self._preprocess_noisy_student_for_dino(noisy_z, timesteps)
+        else:
+            student_input = noisy_z
+        return self.dino_student(student_input, timesteps, labels)
 
-    def _encode_dino_pair(self, clean_x: torch.Tensor, noisy_z: torch.Tensor, timesteps: torch.Tensor) -> tuple[Optional[torch.Tensor], torch.Tensor]:
+    def _encode_dino_pair(self, clean_x: torch.Tensor, noisy_z: torch.Tensor, timesteps: torch.Tensor, labels: torch.Tensor) -> tuple[Optional[torch.Tensor], torch.Tensor]:
         """一次取出两条 DINO 通路的 token：
 
         - student_tokens：带噪图像 → DINO+LoRA（可训练），供 JiT 输入融合；
-          native 模式没有这条支路，返回 None；
+          native 模式没有这条支路，返回 None；labels 为 drop 后标签，供 y 条件注入；
         - target_tokens：干净图像 → frozen iREPA teacher，作对齐目标；
           noirepa 模式跳过 teacher 前向，返回 None。
         """
         student_tokens = (
             None
             if self.dino_jit_input_mode == "native"
-            else self._encode_noisy_student(noisy_z, timesteps)
+            else self._encode_noisy_student(noisy_z, timesteps, labels)
         )
         if not self.irepa_alignment:
             return student_tokens, None
@@ -373,7 +384,7 @@ class DINOJiTDenoiser(nn.Module):
         student_tokens = (
             None
             if self.dino_jit_input_mode == "native"
-            else self._encode_noisy_student(noisy_z, timesteps)
+            else self._encode_noisy_student(noisy_z, timesteps, labels)
         )
         label_drop_mask = (
             labels == self.num_classes
@@ -406,7 +417,7 @@ class DINOJiTDenoiser(nn.Module):
         # 用同一 t_eps 计算目标和预测 velocity，保持 iREPA 的损失定义。
         v = (x - z) / (1.0 - t).clamp_min(self.t_eps)
 
-        student_tokens, target_tokens = self._encode_dino_pair(x, z, t)
+        student_tokens, target_tokens = self._encode_dino_pair(x, z, t, labels_dropped)
         jit_tokens, input_diagnostics = self._compose_jit_input_tokens(
             z, student_tokens, t, label_drop_mask=label_drop_mask,
         )
