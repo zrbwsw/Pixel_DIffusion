@@ -11,6 +11,7 @@
 !/5-3-Residual(0,1)-1017(DINOv3-B16)/
 !/Ours_BaseT_nogamma_Residual_1016/
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/
+!/Our_rmsnorm2_4DiT_Residual_ft_1024/
 
 # Never publish credentials or machine-local configuration.
 .env
@@ -31,6 +32,7 @@ credentials*.json
 !/5-3-Residual(0,1)-1017(DINOv3-B16)/.gitignore
 !/Ours_BaseT_nogamma_Residual_1016/.gitignore
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/.gitignore
+!/Our_rmsnorm2_4DiT_Residual_ft_1024/.gitignore
 .venv/
 venv/
 __pycache__/
