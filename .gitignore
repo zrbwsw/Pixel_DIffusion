@@ -12,6 +12,8 @@
 !/Ours_BaseT_nogamma_Residual_1016/
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/
 !/Our_rmsnorm2_4DiT_Residual_ft_1024/
+!/Ours_BaseT_rmsnorm2_Residual_1016_dinotycond_projtcond_consistency/
+!/Ours_BaseT_rmsnorm2_Residual_1016_dino_none_cond_projtycond_consistency/
 
 # Never publish credentials or machine-local configuration.
 .env
@@ -33,6 +35,8 @@ credentials*.json
 !/Ours_BaseT_nogamma_Residual_1016/.gitignore
 !/Ours_BaseT_noaffine_nogamma_Residual_1017/.gitignore
 !/Our_rmsnorm2_4DiT_Residual_ft_1024/.gitignore
+!/Ours_BaseT_rmsnorm2_Residual_1016_dinotycond_projtcond_consistency/.gitignore
+!/Ours_BaseT_rmsnorm2_Residual_1016_dino_none_cond_projtycond_consistency/.gitignore
 .venv/
 venv/
 __pycache__/

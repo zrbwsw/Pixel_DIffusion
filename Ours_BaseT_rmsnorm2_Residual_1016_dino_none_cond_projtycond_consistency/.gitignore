@@ -1,0 +1,45 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Training outputs and generated metrics
+checkpoints/
+outputs/
+runs/
+wandb/
+*.log
+*.csv
+*.jsonl
+events.out.tfevents.*
+
+# Generated figures and sampled images
+figures/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.tif
+*.tiff
+
+# Large model/data artifacts
+pretrain_models/
+fid_stats
+*.pth
+*.pt
+*.ckpt
+*.tar
+*.npz
+*.npy
+
+# Local editor/runtime noise
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Machine launchers and local regression tests are not published
+scripts/
+tests/
