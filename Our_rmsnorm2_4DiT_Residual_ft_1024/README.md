@@ -1,4 +1,4 @@
-# Our RMSNorm2 4DiT Residual
+# Our DinoTYCond 4DiT RMSNorm2 Residual
 
 这个目录从 `Ours_BaseT_rmsnorm2_Residual_1016` 复制，只有 token 路由改成“四层双路径”结构；teacher、DINO+LoRA、PgT、RMSNorm、损失、采样和 iREPA 训练框架继续沿用原实现。
 
@@ -17,15 +17,15 @@
 干净图像 x → ImageNet 标准化 → 冻结 DINO teacher → 最后层 normalized token → 对齐目标
 ```
 
-两条前缀路径使用完全相同的 JiTBlock 结构和初始权重，但参数不共享：JiT 路使用 `net.blocks[0:4]`，DINO 路使用 `dino_prefix_blocks` 的深拷贝。两路都先加 JiT 位置编码、共用 `c=t_embedder(t)+y_embedder(y)` 条件；第 4 层输出分别经过各自 RMSNorm 后，才按 reverse 权重融合。当前配置使用 `f(t)=sigmoid(10*(t-0.3))`。MLS 的顺序与 1016 相同：每个选中层先分别过 final LN，再做均值+末层空间均值聚合，聚合后不再过 LN。
+两条前缀路径使用完全相同的 JiTBlock 结构和初始权重，但参数不共享：JiT 路使用 `net.blocks[0:4]`，DINO 路使用 `dino_prefix_blocks` 的深拷贝。两路都先加 JiT 位置编码、共用 `c=t_embedder(t)+y_embedder(y)` 条件；第 4 层输出分别经过各自 RMSNorm 后，才按 reverse 权重融合。当前配置使用 `f(t)=sigmoid(20*(t-0.3))`。MLS 的顺序与 1016 相同：每个选中层先分别过 final LN，再做均值+末层空间均值聚合，聚合后不再过 LN。
 
 冻结 teacher 只看干净图像，保持 ImageNet normalization、最后层 normalized patch tokens 和 `no_grad` 行为不变。DINO 路第四层在 RMSNorm 之前的原始输出单独进入 ConvProj，alignment loss 既不使用融合后的 token，也不使用融合分支的 RMSNorm 后版本。
 
-新配置和训练入口：
+当前配置和训练入口（命名按实际数据流排列）：
 
-- [configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml](configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml)
+- [configs/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml](configs/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml)
 - [fourdit_denoiser.py](fourdit_denoiser.py)
-- [scripts/train_our_rmsnorm2_4dit_residual_ft_1024_B80_4gpu.sh](scripts/train_our_rmsnorm2_4dit_residual_ft_1024_B80_4gpu.sh)
+- [scripts/train_Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80_8gpu.sh](scripts/train_Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80_8gpu.sh)
 
 新模式由 `dino_jit_input_mode: post_block_time_blend` 和 `dual_path_depth: 4` 控制。`native`、`time_blend` 在代码层仍保留；1016 的旧实验配置不随本目录维护。
 
@@ -38,7 +38,7 @@
 - `jit/`：iREPA 的 JiT、训练循环、DDP、EMA、checkpoint 和评测代码；
 - `SSL_code/dinov3/`：本地 DINOv3 源码。
 
-本目录没有复制 checkpoint、日志和缓存。训练输出默认写入 `checkpoints/Our_rmsnorm2_4DiT_Residual_ft_1024-B-80/`。
+本目录没有复制 checkpoint、日志和缓存。训练输出默认写入 `checkpoints/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80/`。
 
 本目录从 `Ours_BaseT_rmsnorm2_Residual_1016` 的本地版本衍生，研究**生成侧 DINO token 与 JiT 原生 patch token 分别经过四个 JiT blocks 后再按时间权重融合**。训练时另有冻结的 DINO teacher，为 DINO 路第四层输出提供 iREPA 对齐目标（不对齐融合后的 token）。
 
@@ -48,7 +48,7 @@
 
 | 顺序 | 文件 | 职责与来源 |
 |---|---|---|
-| 1 | [configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml](configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml) | 当前四层双路径配方：模型开关、训练与在线评测参数。 |
+| 1 | [configs/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml](configs/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml) | DinoTYCond 四层双路径配方：DINO 条件注入、4DiT 路由、RMSNorm2、Residual 融合和训练参数。 |
 | 2 | [main_dino_jit.py](main_dino_jit.py) | 我们的入口：追加参数，将模型和数据集接入 iREPA 训练框架。 |
 | 3 | [fourdit_denoiser.py](fourdit_denoiser.py) | 本目录的核心模型：四层双路径 token 路由、融合与对齐、采样；其余逻辑继承 dino_jit_denoiser.py。 |
 | 4 | [dino_encoder.py](dino_encoder.py) | 我们的工厂：`build_irepa_teacher` / `build_dino_student` 独立构建两条编码器路径。 |
@@ -57,7 +57,7 @@
 | 5 | [dino_v3_lora.py](dino_v3_lora.py) | 生成侧 student 包装：选层、MLS 聚合、final LN、冻结/解冻；teacher 不依赖此文件。 |
 | 6 | [dino_lora.py](dino_lora.py) | 我们的 LoRA 工具：冻结原 Linear，向 qkv/proj/fc1/fc2 注入可训练低秩增量。 |
 | 7 | [pixeldit2_projector.py](pixeldit2_projector.py) | 改编自 PixelDiT2 的生成侧 PgT：处理 DINO token，并注入时间条件。 |
-| 融合权重 | [blend_time.py](blend_time.py) | 仅变换融合系数中的 t；本配置使用 `sigmoid(10*(t-0.3))`。 |
+| 融合权重 | [blend_time.py](blend_time.py) | 仅变换融合系数中的 t；本配置使用 `sigmoid(20*(t-0.3))`。 |
 | 可后看 | [jit_ddt_head.py](jit_ddt_head.py) | 参考 RAEv2/JiT 的可选 DDT 输出头；当前 NoDDTHead 配置不启用。 |
 
 “我们”包括从 1016 继承的项目扩展，不表示全部代码都是本实验新写。上游改编文件保留了来源及许可。
@@ -136,8 +136,8 @@ scripts/启动脚本 + configs/实验.yaml
 | `dino_student_label_cond` | 默认 `false`；`true` 时同位置加 JiT 同款 `y_embedder(y)`，跟随 label drop（null 类=1000），训练与 CFG 采样一致。 |
 | `dino_jit_input_mode` | `native` 只用 JiT patch 输入；`time_blend` 在 blocks 前融合；`post_block_time_blend` 让两路各过前4个独立 blocks 后再融合。三种模式都训练 JiT patch embedding。 |
 | `dino_time_blend_reverse` | `false`：`t*DINO + (1-t)*JiT`；`true`：`(1-t)*DINO + t*JiT`。不改变扩散、JiT 或 PgT 使用的原始 `t`。 |
-| `dino_time_blend_transform` | 本配置为 `sigmoid`，把融合系数中的 `t` 替换为 `f(t)=sigmoid(key*(t-a))`。 |
-| `dino_time_blend_key` | sigmoid 的固定斜率；本配置为10，不是可学习权重。 |
+| `dino_time_blend_transform` | 本配置为 `sigmoid`，把融合系数中的 `t` 替换为 `f(t)=sigmoid(20*(t-0.3))`。 |
+| `dino_time_blend_key` | sigmoid 的固定斜率；本配置为20，不是可学习权重。 |
 | `dino_time_blend_a` | sigmoid 的固定中心点；本配置为0.3，`t=a` 时两路各占0.5。 |
 | `dino_jit_pre_blend_rmsnorm` | 控制第4层输出、加权融合前的两路 RMSNorm；两路各有自己的可学习 gamma。 |
 | `dino_aggregation`、`dino_layers` | 生成 DINO 的取层与聚合；B/16 的 `mls/default` 使用 `[2,5,8,11]`。 |
@@ -153,7 +153,7 @@ scripts/启动脚本 + configs/实验.yaml
 
 解析 norm 继续使用 `_preprocess_noisy_student_for_dino()`：令 `μ=2·ImageNet_mean−1`、`σ=2·ImageNet_std`，返回 `(z_t−t·μ) / sqrt(t²·σ²+(1−t)²·noise_scale²)`。训练和采样共用这条路径；这里使用原始扩散时间 t，不使用 sigmoid 融合权重 f(t)。当前 reverse / sigmoid 配方仍为 `dino_preprocess_input: false`。
 
-sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法配置 [Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml](configs/Our_rmsnorm2_4DiT_Residual_ft_1024_B80.yaml)。融合权重语义与 1016 一致：对应公式为 `(1-f(t))*DINO + f(t)*JiT`（reverse 开启时），本配置的 `f(t)` 为 `sigmoid(10*(t-0.3))`；PgT、JiT 时间条件、加噪、velocity/loss、采样时间步及 CFG interval 均仍使用原始 `t`。1016 的历史配方与启动脚本见 `../Ours_BaseT_rmsnorm2_Residual_1016/`。
+sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法配置 [Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml](configs/Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80.yaml)。融合权重语义与 1016 一致：对应公式为 `(1-f(t))*DINO + f(t)*JiT`（reverse 开启时），本配置的 `f(t)` 为 `sigmoid(20*(t-0.3))`；PgT、JiT 时间条件、加噪、velocity/loss、采样时间步及 CFG interval 均仍使用原始 `t`。1016 的历史配方与启动脚本见 `../Ours_BaseT_rmsnorm2_Residual_1016/`。
 
 ## 5. 脚本、资源和输出去哪找
 
@@ -161,7 +161,7 @@ sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法
 
 | 用途 | `scripts/` 下的入口 |
 |---|---|
-| 本方法训练（四卡） / 通用训练 | `train_our_rmsnorm2_4dit_residual_ft_1024_B80_4gpu.sh` / `train_portable.sh` |
+| DinoTYCond FourDiT 训练（八卡） / 通用训练 | `train_Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80_8gpu.sh` / `train_portable.sh` |
 | 资源预检 | `check_runtime.py`、`portable_env.sh` |
 | 连接与执行公共工具 | `run_on_gpu.sh` 负责 SSH；`train_env.sh` / `check_training_launch.py` 负责环境、前台运行与记录 |
 | 离线采样与评测 | `sample_ckpt_8gpu.sh`（顶部配置的模板）、`sample_portable.sh`；默认 FlowDPM100，Heun50 需传 `--sampler=heun --steps=50` |
@@ -171,7 +171,7 @@ sigmoid 等 1016 实验配方不在本目录维护；本目录只保留本方法
 先激活已有环境或设置 `PYTHON_BIN`。在本目录只核对配置和资源：
 
 ```bash
-bash scripts/train_our_rmsnorm2_4dit_residual_ft_1024_B80_4gpu.sh --preflight
+bash scripts/train_Our_DinoTYCond_4DiT_rmsnorm2_Residual_ft_K20_A0p3_B80_8gpu.sh --preflight
 ```
 
 安装新环境用 `scripts/install_requirements.sh`，迁移见 [REMOTE_SETUP.md](../REMOTE_SETUP.md)；GPU 节点使用准备好的离线资源。
