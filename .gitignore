@@ -63,3 +63,6 @@ lightning_logs/
 
 !/Ours_BaseT_rmsnorm2_Residual_1016_dino4LN_1026/
 !/Ours_BaseT_rmsnorm2_Residual_1016_dino4LN_1026/.gitignore
+
+!/Ours_BaseT_rmsnorm2_Residual_1016_dinocosloss_1026/
+!/Ours_BaseT_rmsnorm2_Residual_1016_dinocosloss_1026/.gitignore
