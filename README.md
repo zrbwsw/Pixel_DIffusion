@@ -46,6 +46,7 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 | `Ours_BaseT_DinoT4Y8_1008/` | BaseT + DinoT4Y8 方法代码及历史训练、采样结果。 |
 | `Ours_BaseT_Residual_1008/` | BaseT + Residual 方法，以及 PgT、时间融合和 NoDDTHead 消融实验。 |
 | `Ours_BaseT_rmsnorm2_Residual_1016/` | 两路独立可学习 RMSNorm 的 NoDDTHead 版本。 |
+| `Ours_BaseT_rmsnorm2_Residual_1016_dino4LN_1026/` | DinoYCond MLS 四层 LN：层 2/5/8 使用独立默认初始化的可学习 LN，层 11 保留预训练 final LN 并开放学习。 |
 | `Ours_BaseT_nogamma_Residual_1016/` | 两路融合前使用无 gamma RMSNorm 的 NoDDTHead 版本。 |
 | `Ours_BaseT_noaffine_nogamma_Residual_1017/` | 生成空间 DINO-LoRA 使用无 affine 最终 LN；iREPA 编码器独立提供保留原始预训练 LN 的正则化目标。 |
 

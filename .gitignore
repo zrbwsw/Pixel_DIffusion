@@ -60,3 +60,6 @@ lightning_logs/
 !/Ours_BaseT_rmsnorm2_Residual_1016_dinoycond_consistency/
 
 !/Ours_BaseT_rmsnorm2_Residual_1016_dinoycond_consistency/.gitignore
+
+!/Ours_BaseT_rmsnorm2_Residual_1016_dino4LN_1026/
+!/Ours_BaseT_rmsnorm2_Residual_1016_dino4LN_1026/.gitignore
