@@ -1,5 +1,7 @@
 # DinoNoneCond + ProjTYCond / JiT 条件一致性
 
+> GitHub 仅发布源码、配置、依赖清单和许可证。下文的 `scripts/`、`tests/`、tmux 与 GPU 连接说明对应 H200 本地工作区，不随本次代码同步；其他机器请自行准备启动脚本与资源路径。
+
 本目录只维护 **a0.3/k20 DinoNoneCond + ProjTYCond 条件一致性**实验。它从首版 `Ours_BaseT_rmsnorm2_Residual_1016_dinotycond_projtcond_consistency` 复制，只改变 DINO 与 PgT 的 t/y 注入方式，其余训练配方保持不变。
 
 ## 模型改动
