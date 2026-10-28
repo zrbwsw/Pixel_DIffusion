@@ -14,6 +14,7 @@
 !/Our_rmsnorm2_4DiT_Residual_ft_1024/
 !/Ours_BaseT_rmsnorm2_Residual_1016_dinotycond_projtcond_consistency/
 !/Ours_BaseT_rmsnorm2_Residual_1016_dino_none_cond_projtycond_consistency/
+!/Ours_BaseT_rmsnorm2_Residual_1016_normft_1028/
 
 # Never publish credentials or machine-local configuration.
 .env
@@ -37,6 +38,7 @@ credentials*.json
 !/Our_rmsnorm2_4DiT_Residual_ft_1024/.gitignore
 !/Ours_BaseT_rmsnorm2_Residual_1016_dinotycond_projtcond_consistency/.gitignore
 !/Ours_BaseT_rmsnorm2_Residual_1016_dino_none_cond_projtycond_consistency/.gitignore
+!/Ours_BaseT_rmsnorm2_Residual_1016_normft_1028/.gitignore
 .venv/
 venv/
 __pycache__/
