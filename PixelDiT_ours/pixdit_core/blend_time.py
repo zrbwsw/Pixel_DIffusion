@@ -1,8 +1,8 @@
 """计算两路 patchify 的时间融合权重，不改变扩散过程本身。
 
-PixDiT 中 t=0 表示纯噪声、t=1 表示干净图像；本函数只产生原生
-patchify 的权重 f(t)，DINO 路权重就是 1-f(t)。PgT、adaLN、加噪和
-采样步进仍使用原始 t，不使用这里变换后的 f(t)。
+PixDiT 中 t=0 表示纯噪声、t=1 表示干净图像；本函数产生 raw
+patchify 的权重 f(t)。默认 (DINO,raw)=(1-f(t),f(t))，reverse 时
+在调用处交换为 (f(t),1-f(t))；扩散过程仍使用原始 t。
 """
 
 import torch

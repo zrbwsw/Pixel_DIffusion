@@ -14,38 +14,57 @@
 
 ```text
 带噪图像 x_t
-  ├─ PixelDiT patchify → RMSNorm ───────────────────────── × f(t)
-  └─ DINOv3+LoRA（可选 y）→ MLS → PgT(t) → RMSNorm ────── × (1-f(t))
+  ├─ DINOv3+LoRA（可选 y）→ MLS → PgT(t) → RMSNorm ────── × (1-f(t))
+  └─ PixelDiT raw patchify → RMSNorm ──────────────────── × f(t)
                                                              ↓ 相加
                                             PixelDiT patch blocks → PiT pixel decoder
 ```
 
-- 时间定义与上游一致：`t=0` 为噪声、`t=1` 为干净图像。`f(t)` 只控制融合，扩散过程和 PgT 使用原始 `t`。
+- 时间定义与上游一致：`t=0` 为噪声、`t=1` 为干净图像。默认 `(DINO,raw)=(1-f(t),f(t))`；`f(t)` 只控制融合，扩散过程和 PgT 使用原始 `t`。
 - 基础配置 `c2i/configs/pix256_xl.yaml` 使用 DINOv3-B/16、LoRA rank/alpha=64、`smoother`，不启用 DinoYCond。DINO 输入不做额外归一化；冻结原 backbone 和 final LN，训练 LoRA 与 DINO patch embedding。
 - `dino_time_blend_transform` 可选 `linear`、`smooth`、`smoother`、`sigmoid`；sigmoid 使用 `dino_time_blend_key`（k）和 `dino_time_blend_a`（a），并归一化到 `f(0)=0,f(1)=1`。
+- `dino_patchify_mode: dino_only` 时只计算 DINO token，跳过原生 `unfold/s_embedder/RMSNorm`；默认 `blend` 保持双路加权。PiT 的 pixel 级输入和解码不受影响。
+- `dino_time_blend_reverse: true` 将 `(DINO,raw)` 从默认 `(1-f(t),f(t))` 改为 `(f(t),1-f(t))`，仅在 `blend` 模式生效。
 - DINO 超参数包括：`dino_label_cond`、`dino_aggregation`（`mls/mean/none`）、`dino_layers`（`default/last/last-N/显式索引`）、`dino_lora_target_modules`、`dino_train_patch_embed`、`dino_train_final_norm`、`dino_generation_final_norm_affine`。启用 y cond 时，独立 `ClassEmbedder` 在 DINO patch embedding 后给每个 patch token 加 `y_embedder(y)`；null 类仍为 1000。
 - `dino_weights: null` 时，从 `PRETRAIN_MODELS_ROOT` 或主仓库 `pretrain_models/` 读取对应 DINOv3 权重；也可在 YAML 中填写显式路径。DINOv2/v3 官方源码与许可证分别位于 `third_party/dinov2/`、`third_party/dinov3/`。
 - 四个 PixelDiT1 预训练 checkpoint 已整理到本目录 `pretrain_models/`；发布文件名会优先解析到该目录。新增分支使上游 checkpoint 不能直接严格加载；本方法训练或恢复需使用完整的新 checkpoint。
 
-### DinoYCond 归一化 sigmoid 配方
+### XL DINOv3-B YCond 归一化 sigmoid 配方
 
-两套配置仅 sigmoid 中心 `a` 和实验名不同：
+当前 XL 配置为 `a=0.1`：`c2i/configs/pix256_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm.yaml` + `scripts/train_pixeldit_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_8gpu.sh`。
 
-- `a=0.1`：`c2i/configs/pix256_xl_dino_ycond_sigmoid_k20_a0p1_norm.yaml` + `scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p1_norm_8gpu.sh`。
-- `a=0.3`：`c2i/configs/pix256_xl_dino_ycond_sigmoid_k20_a0p3_norm.yaml` + `scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p3_norm_8gpu.sh`。
+该配置采用 MLS/default 选层、仅 y cond、LoRA rank/alpha=64、目标层 `qkv,proj,fc1,fc2`、训练 DINO patch embedding、final LN 冻结且保留 affine、PgT、两路 RMSNorm，以及归一化 sigmoid `k=20`。PixelDiT-XL、DINOv2 REPA、优化器、EMA 和采样保持默认值：八卡每卡32、全局 batch256、有效 LR `1e-4`。
 
-两者均为 MLS/default 选层、仅 y cond、LoRA rank/alpha=64、目标层 `qkv,proj,fc1,fc2`、训练 DINO patch embedding、final LN 冻结且保留 affine、PgT、两路 RMSNorm，以及归一化 sigmoid `k=20`。PixelDiT-XL、DINOv2 REPA、优化器、EMA 和采样保持默认值：八卡每卡32、全局 batch256、有效 LR `1e-4`。
+### B DINOv3-B YCond 80 epoch 消融
 
-本机没有上游 HDF5，因此该配方使用 PixelDiT 自带的 `ImageFolderDataset` 读取原始 ImageNet，采用与 REPA-E 相同的 ADM 256 中心裁剪，不做水平翻转；已用真实样本逐像素验证与官方 HDF5 输入一致。DINOv2 teacher 从 `pretrain_models/torch_hub/` 离线加载。
+基于 `pix256_b_80ep.yaml` 的 B 主干和训练周期，提供两组配置与对应 `_4gpu.sh` 脚本：
+
+- `pix256_b_dinov3b_ycond_sigmoid_k20_a0.1_norm.yaml`：归一化 sigmoid，`k=20,a=0.1`。
+- `pix256_b_dinov3b_ycond_linear.yaml`：线性融合 `f(t)=t`。
+
+两组均为四卡每卡64、全局 batch256、80 epoch，每20 epoch 进行在线采样并保存周期 checkpoint；输出目录仍为 `train_logs/exp_<实验名>/`，在线样本写入 `val_256_b/`。
+
+### 按论文协议分阶段训练
+
+A0.1 DINOv3-B YCond 配方提供以下阶段配置和同名训练脚本：
+
+- XL `_80`：到400K steps（约80 epoch），`lr=1e-4、clip=1.0`。
+- XL `_160`：从80续训到800K steps（约160 epoch），保持 `lr=1e-4、clip=1.0`。
+- XL `_320`：从160续训到1.6M steps（约320 epoch），通过 `override_lr_on_resume=1e-5` 覆盖恢复的学习率，并设置 `clip=0.5`。
+- B `_160`：对应论文 B 的800K steps，全程 `lr=1e-4、clip=1.0`，只需这一份配置，无阶段切换。
+
+XL 应依次执行 `_80 → _160 → _320`。三个阶段的 `tags.exp` 相同，因此默认写入同一个 `train_logs/exp_<实验名>/`，依靠 `auto_resume` 读取最新 checkpoint；`_320` 不应在没有前序 checkpoint 的空目录中从头启动。B 的 `_160` 同样可从已有80 epoch目录继续训练。
+
+本机没有上游 HDF5，因此这些配方使用 PixelDiT 自带的 `ImageFolderDataset` 读取原始 ImageNet，采用与 REPA-E 相同的 ADM 256 中心裁剪，不做水平翻转；已用真实样本逐像素验证与官方 HDF5 输入一致。DINOv2 teacher 从 `pretrain_models/torch_hub/` 离线加载。
 
 ```bash
 # 先检查命令和资源，不启动训练。
-bash scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p1_norm_8gpu.sh --dry-run
-bash scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p1_norm_8gpu.sh --preflight
+bash scripts/train_pixeldit_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_8gpu.sh --dry-run
+bash scripts/train_pixeldit_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_8gpu.sh --preflight
 
 # 按项目约定，在开发机创建同名 tmux 后前台执行；默认连接 GPU2 八卡。
-tmux new -s 'pixeldit_ours_xl_dino_ycond_sigmoid_norm_k20_a0p1_bs256'
-bash scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p1_norm_8gpu.sh
+tmux new -s 'pixeldit_ours_xl_dinov3b_ycond_sigmoid_norm_k20_a0p1_bs256'
+bash scripts/train_pixeldit_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_8gpu.sh
 ```
 
 所有脚本固定 `WANDB_MODE=offline`，训练指标由 `WandbLogger` 写入对应 `RUN_DIR/wandb/` 下的离线 run，不做在线上传。`train.log`、checkpoint 和采样 `output.npz` 也保存在本地。

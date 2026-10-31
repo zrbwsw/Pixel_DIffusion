@@ -36,8 +36,11 @@ PixelDiT_ours/
 │  ├─ main.py                        # [上游] LightningCLI 训练/采样入口
 │  ├─ configs/
 │  │  ├─ pix256_xl.yaml              # [修改] 原 XL 配置 + DINO 参数；smoother、无 y cond
-│  │  ├─ pix256_xl_dino_ycond_sigmoid_k20_a0p1_norm.yaml  # [新增] a=0.1
-│  │  ├─ pix256_xl_dino_ycond_sigmoid_k20_a0p3_norm.yaml  # [新增] a=0.3
+│  │  ├─ pix256_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm.yaml  # XL a=0.1
+│  │  ├─ pix256_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_{80,160,320}.yaml  # XL 分阶段
+│  │  ├─ pix256_b_dinov3b_ycond_sigmoid_k20_a0.1_norm.yaml   # B 80ep a=0.1
+│  │  ├─ pix256_b_dinov3b_ycond_sigmoid_k20_a0.1_norm_160.yaml  # B 160ep
+│  │  ├─ pix256_b_dinov3b_ycond_linear.yaml             # B 80ep 线性融合
 │  │  └─ 其他 YAML                   # [上游] 其他模型配置
 │  └─ src/
 │     ├─ diffusion.py                # [修改] REPA/采样不变；DINOv2 支持本地加载并补注释
@@ -63,20 +66,20 @@ PixelDiT_ours/
 
 ### 3.1 两路 patchify 与融合
 
-当前 `PixDiT.forward()` 的输入为带噪图像 `x [B,3,H,W]`、时间 `t [B]`、已 drop 的类别 `y [B]`：
+当前 `PixDiT.forward()` 的输入为带噪图像 `x [B,3,H,W]`、时间 `t [B]`、已 drop 的类别 `y [B]`。可选 `patch_condition [B,N,C]` 是外部已完成 patch 级处理的条件；`dino_patchify_mode=dino_only` 时只走 DINO 路，`dino_time_blend_reverse=true` 时交换下述两路权重：
 
 ```text
 x_t
-├─ 原生 unfold → s_embedder → RMSNorm ──────────────── × f(t)
-└─ DINOv3+LoRA → final LN → 选层/MLS → PgT(原始t) → RMSNorm × (1-f(t))
+├─ DINOv3+LoRA → final LN → 选层/MLS → PgT(原始t) → RMSNorm × (1-f(t))
+└─ raw unfold → s_embedder → RMSNorm ─────────────────────── × f(t)
                                                         ↓ 相加
                                          融合后的 patch tokens [B,N,C]
 ```
 
-- **原生分支**：`s_embedder` 把每个 patch 的 `3P²` 像素向量映射到 `C=hidden_size`，是 PixelDiT 原有 patchify。
+- **raw 分支**：`s_embedder` 把每个 patch 的 `3P²` 像素向量映射到 `C=hidden_size`，是 PixelDiT 原有 patchify。
 - **DINO 分支**：提取预训练语义特征。原 backbone 冻结，训练 LoRA、可配置的 patch embedding 和 y embedding。
 - **两路 RMSNorm**：先统一两路 token 的通道尺度，再加权，避免直接相加时某一路尺度占优。
-- **权重方向**：`f(t)` 是原生 patchify 权重，DINO 路为 `1-f(t)`。因此 `t=0`（噪声）主要由 DINO 提供语义，`t=1`（干净图）完全使用原生 patchify。
+- **权重方向**：默认 `(DINO,raw)=(1-f(t),f(t))`，reverse 后为 `(f(t),1-f(t))`。因此默认 `t=0`（噪声）全部使用 DINO，`t=1`（干净图）全部使用 raw patchify。
 - **四种函数**：`linear=t`、`smooth=3t²-2t³`、`smoother=6t⁵-15t⁴+10t³`，以及端点归一化 sigmoid。当前 DinoYCond 配方使用后者，`k=20`，`a=0.1` 或 `0.3`，保证 `f(0)=0,f(1)=1`。
 
 `f(t)` 只用于融合。扩散加噪、PgT 的时间条件、主 PixelDiT 的 `t_embedder` 和采样步进都继续使用原始 `t`。
@@ -188,12 +191,12 @@ v_t = x - noise
 
 ### 配置与运行脚本
 
-- `c2i/configs/pix256_xl_dino_ycond_sigmoid_k20_a0p1_norm.yaml`
-- `c2i/configs/pix256_xl_dino_ycond_sigmoid_k20_a0p3_norm.yaml`
-- `scripts/run_on_gpu.sh`：开发机到 GPU 节点的执行入口，含机器连接信息，仅在本机维护；远端可直接在 GPU 上运行其余脚本。
+- `c2i/configs/pix256_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm.yaml` 及 `_80/_160/_320` 阶段配置。
+- `c2i/configs/pix256_b_dinov3b_ycond_sigmoid_k20_a0.1_norm.yaml`、`_160` 和线性融合配置。
+- `scripts/run_on_gpu.sh`：含机器连接信息，仅在本机维护；远端可直接在 GPU 上运行其余脚本。
 - `scripts/train_env.sh`：环境、资源预检、日志和前台运行工具。
-- `scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p1_norm_8gpu.sh`
-- `scripts/train_pixeldit_xl_dino_ycond_sigmoid_k20_a0p3_norm_8gpu.sh`
+- `scripts/train_pixeldit_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm_8gpu.sh` 及 `_80/_160/_320` 阶段脚本。
+- `scripts/train_pixeldit_b_dinov3b_ycond_sigmoid_k20_a0.1_norm_4gpu.sh`、`_160` 和线性融合脚本。
 - `scripts/sample_ckpt_8gpu.sh`：通用 checkpoint 采样，支持 FlowDPM、Heun、Euler 及 CFG 区间覆盖。
 - `scripts/evaluate_npz_fid_is_fdr6.sh`：使用 `nanogen-evals` 离线计算 NPZ 的 FID、IS、FDR6。
 - `scripts/evaluate_npz_jit_fid_is.sh`：按 JiT/torch-fidelity 协议直接计算 NPZ 的 FID、IS。
@@ -221,11 +224,11 @@ v_t = x - noise
 ## 7. 配置、资源与运行输出
 
 - **基础配置 `pix256_xl.yaml`**：默认 `smoother`，`dino_label_cond` 未开启；不是 DinoYCond 实验。
-- **DinoYCond 配置**：`...a0p1_norm.yaml` 与 `...a0p3_norm.yaml`，均为归一化 sigmoid `k=20`、y cond、LoRA rank/alpha=64、MLS/default 选层、`qkv,proj,fc1,fc2`。
+- **DinoYCond 配置**：当前发布 A0.1 归一化 sigmoid `k=20`、y cond、LoRA rank/alpha=64、MLS/default 选层、`qkv,proj,fc1,fc2`，以及对应的 XL/B 阶段配置。
 - **数据**：新配方使用上游已有的 `ImageFolderDataset`，读取原始 ImageNet，采用 ADM 中心裁剪，`random_flip: false`。已用真实样本验证它与 REPA-E HDF5 的像素和归一化输入一致。
-- **PixelDiT v1 权重**：本目录 `pretrain_models/` 下的四个 checkpoint。
+- **PixelDiT v1 权重**：统一使用主仓库 `Pixel_DIffusion/pretrain_models/` 下的四个 checkpoint。
 - **DINOv3 权重**：默认从 `PRETRAIN_MODELS_ROOT` 或主仓库 `Pixel_DIffusion/pretrain_models/` 读取，也可在 YAML 中显式指定 `dino_weights`。
-- **DINOv2 teacher**：从本目录 `pretrain_models/torch_hub/` 的本地源码和权重缓存加载。
+- **DINOv2 teacher**：从统一目录 `pretrain_models/torch_hub/` 的本地源码和权重缓存加载。
 - **日志**：`train.log` 实时写入对应 `RUN_DIR/train.log`；W&B 固定 `offline`，指标写入 `RUN_DIR/wandb/` 下的 offline run，不自动在线上传。
-- **频率**：训练指标每 50 steps，checkpoint 每 100000 steps，在线采样每 100000 steps。
+- **频率**：XL 指标每500 steps，B 指标每50 steps；XL checkpoint 和在线采样每100000 steps，B 按 epoch 配置执行。
 - **同步纪律**：`scripts/`、checkpoint、训练日志、采样结果和缓存只作为本地资源，不按算法源码上传。

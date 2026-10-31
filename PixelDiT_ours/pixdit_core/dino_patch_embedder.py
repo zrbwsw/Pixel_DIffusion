@@ -2,7 +2,7 @@
 
 数据流：带噪图像 → DINOv3+LoRA/选层聚合 → PgT(t) → RMSNorm。
 PgT 同时完成 D 到 C 的维度适配、时间条件注入和 token 间信息变换；
-输出再与原生 patchify 按 f(t)/(1-f(t)) 加权。
+输出可与原生 patchify 加权，也可在 dino_only 模式直接作为 patch 条件。
 """
 
 import torch

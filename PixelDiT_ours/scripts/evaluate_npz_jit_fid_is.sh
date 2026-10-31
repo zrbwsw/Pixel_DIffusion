@@ -4,6 +4,7 @@ set -euo pipefail
 export TZ="${TZ:-Asia/Shanghai}"
 
 # ======================== 评测配置 ========================
+# 默认 NPZ 来自已完成的历史 XL 实验；可通过 NPZ 环境变量指定新实验产物。
 NPZ="${NPZ:-/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/PixelDiT_ours/train_logs/exp_pixeldit_ours_xl_dino_ycond_sigmoid_norm_k20_a0p1_bs256/val_256_xl_online_flow100_scale3.25_interval0_1_1/iter_400000/output.npz}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 DEVICE="${DEVICE:-cuda}"

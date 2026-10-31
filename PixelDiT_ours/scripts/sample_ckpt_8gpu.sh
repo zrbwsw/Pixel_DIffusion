@@ -5,13 +5,14 @@ set -euo pipefail
 export TZ="${TZ:-Asia/Shanghai}"
 
 # ======================== 采样配置 ========================
+# 已完成的 XL 训练保留历史输出目录名；新配置和后续实验统一使用 dinov3b。
 CHECKPOINT="${CHECKPOINT:-/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/PixelDiT_ours/train_logs/exp_pixeldit_ours_xl_dino_ycond_sigmoid_norm_k20_a0p1_bs256/epoch=79-step=400000.ckpt}"
 SAMPLER="${SAMPLER:-flow_dpm_solver}"   # flow_dpm_solver、heun 或 euler
 CFG="${CFG:-3.25}"
 INTERVAL_MIN="${INTERVAL_MIN:-0.1}"
 INTERVAL_MAX="${INTERVAL_MAX:-1.0}"
 STEPS="${STEPS:-100}"
-CONFIG="${CONFIG:-/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/PixelDiT_ours/c2i/configs/pix256_xl_dino_ycond_sigmoid_k20_a0p1_norm.yaml}"
+CONFIG="${CONFIG:-/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/PixelDiT_ours/c2i/configs/pix256_xl_dinov3b_ycond_sigmoid_k20_a0p1_norm.yaml}"
 NUM_IMAGES="${NUM_IMAGES:-50000}"       # 少于1000时上游数据集仍按每类1张生成1000张
 PRED_BSZ="${PRED_BSZ:-32}"              # 每张 GPU 的采样 batch size
 SEED="${SEED:-5000}"

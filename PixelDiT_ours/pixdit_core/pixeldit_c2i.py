@@ -2,7 +2,7 @@
 
 patch 级先用 token 表示整幅图的语义和全局关系；pixel 级再恢复每个
 patch 内部的纹理与像素细节。本目录仅把 patch 级输入改成原生 patchify
-与 DINO+LoRA 的时间加权，后续 DiT/PiT 计算仍遵循上游 PixelDiT。
+与 DINO+LoRA 的时间加权或 DINO-only，后续 DiT/PiT 仍遵循上游 PixelDiT。
 """
 
 import numpy as np
@@ -233,6 +233,8 @@ class PixDiT(nn.Module):
         dino_aggregation="mls",
         dino_layers="default",
         dino_label_cond=False,
+        dino_patchify_mode="blend",
+        dino_time_blend_reverse=False,
         dino_time_blend_transform="smoother",
         dino_time_blend_key=20.0,
         dino_time_blend_a=0.1,
@@ -249,6 +251,8 @@ class PixDiT(nn.Module):
         self.num_classes = int(num_classes)
         self.use_pixel_abs_pos = bool(use_pixel_abs_pos)
         self.pit_adaln_post_modulation = bool(pit_adaln_post_modulation)
+        self.dino_patchify_mode = str(dino_patchify_mode).lower()  # blend=双路加权；dino_only=跳过原生 patchify
+        self.dino_time_blend_reverse = bool(dino_time_blend_reverse)  # True 时 (DINO,raw)=(f(t),1-f(t))；默认 (1-f(t),f(t))
         self.dino_time_blend_transform = dino_time_blend_transform
         self.dino_time_blend_key = float(dino_time_blend_key)
         self.dino_time_blend_a = float(dino_time_blend_a)
@@ -326,39 +330,45 @@ class PixDiT(nn.Module):
             nn.init.zeros_(block.adaLN_modulation[0].weight)  # pixel block 初始残差门控为0
             nn.init.zeros_(block.adaLN_modulation[0].bias)
 
-    def forward(self, x, t, y, s=None, mask=None):
+    def forward(self, x, t, y, patch_condition=None, mask=None):
         """从带噪图像预测 velocity 所需的网络输出。
 
         x [B,3,H,W] 是 x_t；t [B] 为干净图像权重（0=噪声，1=干净图）；
-        y [B] 是已执行 label drop 的类别，null 类为1000。若外部传入 s，
-        则把它当作已计算的 patch 条件，跳过下面的 patchify 和 patch blocks。
+        y [B] 是已执行 label drop 的类别，null 类为1000。
+        patch_condition 是可选的外部 patch 级条件 [B,N,C]；传入后跳过 patchify 和 patch blocks。
         """
         B, _, H, W = x.shape  # x [B,3,H,W]
         pos = self.fetch_pos(H // self.patch_size, W // self.patch_size, x.device)  # patch 网格 RoPE [N,head_dim//2]，供全局语义注意力定位
-        x_patches = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)  # 非重叠切块并展开像素通道：[B,N,3P²]
         t_emb = self.t_embedder(t.view(-1)).view(B, -1, self.hidden_size)  # 原始扩散时间映射为全局条件：[B] → [B,1,C]
         y_emb = self.y_embedder(y).view(B, 1, self.hidden_size)  # 类别/null 标签映射为全局条件：[B] → [B,1,C]
         c = nn.functional.silu(t_emb + y_emb)  # 原 PixelDiT 主条件，供所有 patch block 的 adaLN 使用：[B,1,C]
-        if s is None:
-            # 两路都产生 [B,N,C]；f(t) 是原生 patchify 权重，t=1 时只用原生分支。
-            pixel_tokens = self.patch_pre_blend_norm(self.s_embedder(x_patches))  # 原生 patch 向量投影并统一尺度：[B,N,3P²] → [B,N,C]
-            dino_tokens = self.dino_patch_embedder(x, t, y)  # DINO 提取语义，PgT 注入原始 t；y 可选注入 DINO backbone：[B,N,C]
-            blend_t = apply_blend_time(
-                t.reshape(-1),  # 融合只读取原始 t：[B]，不改变扩散时间条件
-                transform=self.dino_time_blend_transform,
-                key=self.dino_time_blend_key,
-                a=self.dino_time_blend_a,
-            )  # 原生 patchify 的时间权重 f(t)：[B]
-            pixel_weight = blend_t.to(device=pixel_tokens.device, dtype=pixel_tokens.dtype).view(B, 1, 1)  # [B] → [B,1,1]，广播到 N 和 C
-            s = pixel_weight * pixel_tokens + (1.0 - pixel_weight) * dino_tokens  # f(t)*原生 + (1-f(t))*DINO；[B,N,C]
+        if patch_condition is None:
+            if self.dino_patchify_mode == "dino_only":
+                patch_condition = self.dino_patch_embedder(x, t, y)  # 只用 DINO token：[B,N,C]，不执行原生 patchify
+            elif self.dino_patchify_mode == "blend":
+                x_patches = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)  # 原生 patch 展平：[B,N,3P²]
+                native_patch_tokens = self.patch_pre_blend_norm(self.s_embedder(x_patches))  # 原生 patch 投影并统一尺度：[B,N,3P²] → [B,N,C]
+                dino_tokens = self.dino_patch_embedder(x, t, y)  # DINO+PgT 语义 token：[B,N,C]
+                blend_t = apply_blend_time(
+                    t.reshape(-1),
+                    transform=self.dino_time_blend_transform,
+                    key=self.dino_time_blend_key,
+                    a=self.dino_time_blend_a,
+                )  # raw 权重 f(t)：[B]；默认 (DINO,raw)=(1-f(t),f(t))
+                if self.dino_time_blend_reverse:
+                    blend_t = 1.0 - blend_t  # reverse 后 (DINO,raw)=(f(t),1-f(t))
+                native_patch_weight = blend_t.to(device=native_patch_tokens.device, dtype=native_patch_tokens.dtype).view(B, 1, 1)  # [B] → [B,1,1]
+                patch_condition = native_patch_weight * native_patch_tokens + (1.0 - native_patch_weight) * dino_tokens  # raw×权重 + DINO×权重：[B,N,C]
+            else:
+                raise ValueError(f"Unknown dino_patchify_mode: {self.dino_patchify_mode}")
             for block in self.patch_blocks:
-                s = block(s, c, pos, mask)  # 全局 patch 注意力逐层提炼语义；s [B,N,C]，c [B,1,C]
-            s = nn.functional.silu(t_emb + s)  # 按上游设计再次加入时间条件，供 pixel block 使用：[B,N,C]
-        batch_size, length, _ = s.shape  # s [B,N,C]，N 是每幅图的 patch 数
-        s_cond = s.view(batch_size * length, self.hidden_size)  # 每个 patch 一份语义条件：[B,N,C] → [B*N,C]
+                patch_condition = block(patch_condition, c, pos, mask)  # 全局 patch 注意力：[B,N,C]
+            patch_condition = nn.functional.silu(t_emb + patch_condition)  # 加时间条件，供 pixel blocks 使用：[B,N,C]
+        batch_size, length, _ = patch_condition.shape  # N 是每幅图的 patch 数
+        patch_condition_flat = patch_condition.view(batch_size * length, self.hidden_size)  # [B,N,C] → [B*N,C]
         x_pixels = self.pixel_embedder(x, img_height=H, img_width=W, patch_size=self.patch_size)  # 原带噪图像的像素序列：[B*N,P²,pixel_C]
         for blk in self.pixel_blocks:
-            x_pixels = blk(x_pixels, s_cond, H, W, self.patch_size, mask)  # 用 patch 语义引导 patch 内像素重建，形状不变
+            x_pixels = blk(x_pixels, patch_condition_flat, H, W, self.patch_size, mask)  # 用 patch 语义引导 patch 内像素重建，形状不变
         x_pixels = self.final_layer(x_pixels)  # 每个像素 token 预测 RGB：[B*N,P²,pixel_C] → [B*N,P²,3]
         C_out = self.out_channels
         P2 = self.patch_size * self.patch_size
