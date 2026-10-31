@@ -1,0 +1,3 @@
+# Backward-compatible entrypoint for the original PixelDiT.
+# For PixelDiT2, install requirements-pixeldit2.txt instead.
+-r requirements-pixeldit1.txt

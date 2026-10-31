@@ -71,3 +71,7 @@ lightning_logs/
 
 !/Ours_BaseT_rmsnorm2_Residual_1016_XL_1027_DDT/
 !/Ours_BaseT_rmsnorm2_Residual_1016_XL_1027_DDT/.gitignore
+
+!/PixelDiT_ours/
+!/PixelDiT_ours/.gitignore
+/PixelDiT_ours/scripts/run_on_gpu.sh

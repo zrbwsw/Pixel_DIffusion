@@ -23,6 +23,8 @@ H 集群协作请先阅读 [当前H200集群项目结构](当前H200集群项目
 
 新增 [`Ours_BaseT_rmsnorm2_Residual_1016_dinocosloss_1026/`](Ours_BaseT_rmsnorm2_Residual_1016_dinocosloss_1026/)：在 DINO MLS → PgT 输出后增加权重 0.5 的逐 patch REPA cosine loss，保留 JiT 第4层 iREPA 对齐。本方法仅发布代码、配置、依赖和说明，不包含脚本、测试目录、checkpoint 或训练采样产物。
 
+新增 [`PixelDiT_ours/`](PixelDiT_ours/)：基于 PixelDiT v1 的 DINO-LoRA 加权 patch 嵌入方法，包含模型源码、训练/采样配置、通用训练/采样/评测脚本及中文说明。预训练权重、训练日志、checkpoint、采样与评测产物均不发布；机器专用 SSH 工具保留在本地。
+
 可移植版本的远端安装、预检、训练和采样参见 [部署说明](REMOTE_SETUP.md)。
 1017 修正版的功能分工和旧 checkpoint 限制参见其 [README](Ours_BaseT_noaffine_nogamma_Residual_1017/README.md)。
 原版本的历史部署说明位于 [remote_setup.md](Ours_BaseT_Residual_1008/readme/remote_setup.md)。

@@ -1,0 +1,63 @@
+{
+  "source": "/mnt/shared-storage-user/datafactory-share/gushishen/agent-z/Pixel_DIffusion/Ours_BaseT_Residual_1008/SSL_code/dinov2",
+  "upstream": "https://github.com/facebookresearch/dinov2",
+  "adaptation": "Only import prefix EPG.SSL_code.dinov2.dinov2 -> dinov2; minimal hub exports ViT-B/14. Model/layer numerical code unchanged.",
+  "files": {
+    "LICENSE": {
+      "source_sha256": "600cc67cc4cb2f5ea317dcfc687ad1c74dc4bec8782bbe9db0afd83513b935b7",
+      "sha256": "600cc67cc4cb2f5ea317dcfc687ad1c74dc4bec8782bbe9db0afd83513b935b7"
+    },
+    "dinov2/__init__.py": {
+      "source_sha256": "0d2b87b7e71c7f7279ccc4b4f8b541d26071425284a0ea01a5a435fac4511cfe",
+      "sha256": "0d2b87b7e71c7f7279ccc4b4f8b541d26071425284a0ea01a5a435fac4511cfe"
+    },
+    "dinov2/models/vision_transformer.py": {
+      "source_sha256": "f7ee14b946db1b928c00f57de3fccc5abf1ebd213ab90c22549bc2bcbce09894",
+      "sha256": "7799a260f2d7d0fe197331d08502fb8c542f9b7424723650f6a39b64fa2639ea"
+    },
+    "dinov2/hub/backbones.py": {
+      "source_sha256": "9f5557d6480d99f8edf75544e1eccaf797f32c9f87484d75f41827dc37ac2a77",
+      "sha256": "9f5557d6480d99f8edf75544e1eccaf797f32c9f87484d75f41827dc37ac2a77"
+    },
+    "dinov2/hub/utils.py": {
+      "source_sha256": "c0533919016531b320bf9aef7cd7001249bc8ef8957cdb29246c15b67d5abdf8",
+      "sha256": "c0533919016531b320bf9aef7cd7001249bc8ef8957cdb29246c15b67d5abdf8"
+    },
+    "dinov2/layers/patch_embed.py": {
+      "source_sha256": "40da6add3d811198ea3e17cb99cdd4e5cda59e369efbbe3d18d89308618cf142",
+      "sha256": "40da6add3d811198ea3e17cb99cdd4e5cda59e369efbbe3d18d89308618cf142"
+    },
+    "dinov2/layers/drop_path.py": {
+      "source_sha256": "b9f8236e86054b9d9a71275efcad2a9ecaa1f86b529d4b8d6109ddb5e806f67a",
+      "sha256": "b9f8236e86054b9d9a71275efcad2a9ecaa1f86b529d4b8d6109ddb5e806f67a"
+    },
+    "dinov2/layers/__init__.py": {
+      "source_sha256": "1b55deed39d5ab0b589bef421bbfe06f24a10cd590a0f8403234c9ee4e34109d",
+      "sha256": "1b55deed39d5ab0b589bef421bbfe06f24a10cd590a0f8403234c9ee4e34109d"
+    },
+    "dinov2/layers/block.py": {
+      "source_sha256": "60c0ac7dfa4474be313fabfa5a23d82faf6f0cecd4e720a88be35de9788cb636",
+      "sha256": "60c0ac7dfa4474be313fabfa5a23d82faf6f0cecd4e720a88be35de9788cb636"
+    },
+    "dinov2/layers/dino_head.py": {
+      "source_sha256": "9fdb1fa61c0609dc0876f711f9d0d828c33bf9fd972aab3d9c968d44e16b98d1",
+      "sha256": "9fdb1fa61c0609dc0876f711f9d0d828c33bf9fd972aab3d9c968d44e16b98d1"
+    },
+    "dinov2/layers/attention.py": {
+      "source_sha256": "79c7be7a452b3aad96698ec38d5d5150b9f4d8ac084fa93324510dc9f624775d",
+      "sha256": "79c7be7a452b3aad96698ec38d5d5150b9f4d8ac084fa93324510dc9f624775d"
+    },
+    "dinov2/layers/layer_scale.py": {
+      "source_sha256": "dadd5aafe178f1bf72a205a02a6645c7e635cacbad585d4a7369c200c6e89135",
+      "sha256": "dadd5aafe178f1bf72a205a02a6645c7e635cacbad585d4a7369c200c6e89135"
+    },
+    "dinov2/layers/mlp.py": {
+      "source_sha256": "255825c73b60a916dd00eb1e38aacbcdbf316e40d6a005efb46e245b7edb43aa",
+      "sha256": "255825c73b60a916dd00eb1e38aacbcdbf316e40d6a005efb46e245b7edb43aa"
+    },
+    "dinov2/layers/swiglu_ffn.py": {
+      "source_sha256": "e46d2948fb97e497cf991ff82ce30cb59b59fdf2e12a19568417113716b4f119",
+      "sha256": "e46d2948fb97e497cf991ff82ce30cb59b59fdf2e12a19568417113716b4f119"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+__pycache__/
+c2i/train_logs/
+/pretrain_models/
+/train_logs/
+/eval_checkpoint/
+/wandb/
+/c2i/wandb/
